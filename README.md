@@ -10,7 +10,7 @@
 
 **High-performance, scalable, and secure portfolio website with admin panel**
 
-[Live Demo](#) • [Documentation](#features) • [Report Bug](https://github.com/yourusername/portfolio/issues)
+[Live Demo](https://culture-angels-low-combined.trycloudflare.com/) • [Documentation](#features) • [Report Bug](https://github.com/ozertugrul/modern-portfolio-website/issues)
 
 </div>
 
@@ -152,8 +152,8 @@ Optional (for local development):
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/portfolio.git
-   cd portfolio
+   git clone https://github.com/ozertugrul/modern-portfolio-website.git
+   cd modern-portfolio-website
    ```
 
 2. **Start all services**
@@ -493,9 +493,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Ertuğrul** - Rust Backend Developer
 
-- Website: [your-website.com](#)
-- GitHub: [@yourusername](https://github.com/yourusername)
-- Email: your-email@example.com
+- Website: [Live Demo](https://culture-angels-low-combined.trycloudflare.com/)
+- GitHub: [@ozertugrul](https://github.com/ozertugrul)
+- Email: muhammedozer32@gmail.com
 
 ---
 
