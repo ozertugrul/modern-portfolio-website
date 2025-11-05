@@ -10,13 +10,13 @@ COPY Cargo.lock* ./
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
     cargo build --release && \
-    rm -rf src
+    rm -rf src target/release/backend* target/release/deps/backend*
 
 # Sonra gerçek kaynak kodları kopyala
 COPY src ./src
 
-# Sadece binary'yi rebuild et (dependencies cache'den kullanılacak)
-RUN cargo build --release
+# Binary'yi yeniden compile et (touch main.rs to invalidate cache)
+RUN touch src/main.rs && cargo build --release
 
 # --- Çalışma aşaması ---
 FROM debian:bookworm-slim
