@@ -21,7 +21,7 @@ services:
       - portfolio-network
 
   frontend:
-    build: ./portfolio/frontend
+    build: ./frontend
     expose:
       - "3000"
     environment:
