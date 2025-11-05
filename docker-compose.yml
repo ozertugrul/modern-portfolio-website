@@ -1,0 +1,102 @@
+version: "3.9"
+
+services:
+  nginx:
+    image: nginx:latest
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend1:
+        condition: service_healthy
+      backend2:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - portfolio-network
+
+  frontend:
+    build: ./portfolio/frontend
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    networks:
+      - portfolio-network
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  backend1:
+    build: ./backend
+    environment:
+      - PORT=8080
+      - REDIS_URL=redis://redis:6379
+    expose:
+      - "8080"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - portfolio-network
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  backend2:
+    build: ./backend
+    environment:
+      - PORT=8080
+      - REDIS_URL=redis://redis:6379
+    expose:
+      - "8080"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - portfolio-network
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - portfolio-network
+    # Health check
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Persistence i?in volume (opsiyonel)
+    volumes:
+      - redis-data:/data
+
+networks:
+  portfolio-network:
+    driver: bridge
+
+volumes:
+  redis-data:
