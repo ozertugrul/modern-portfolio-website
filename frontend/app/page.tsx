@@ -244,14 +244,15 @@ export default function Home() {
                 <a
                   href="#portfolio"
                   onClick={() => setActiveTab('portfolio')}
-                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm sm:text-base"
+                  className="group px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all duration-300 font-medium text-sm sm:text-base hover:shadow-xl hover:shadow-blue-500/50 hover:scale-105 relative overflow-hidden"
                 >
-                  {t.home.viewPortfolio}
+                  <span className="relative z-10">{t.home.viewPortfolio}</span>
+                  <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-purple-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
                 </a>
                 <a
                   href="#contact"
                   onClick={() => setActiveTab('contact')}
-                  className="px-6 py-3 border-2 border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors font-medium text-sm sm:text-base"
+                  className="group px-6 py-3 border-2 border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all duration-300 font-medium text-sm sm:text-base hover:shadow-lg hover:scale-105 hover:border-blue-500 dark:hover:border-blue-400"
                 >
                   {t.home.contactMe}
                 </a>
@@ -272,20 +273,20 @@ export default function Home() {
               </div>
             ) : features ? (
             <div className="grid md:grid-cols-3 gap-6 mt-16">
-              <div className="p-6 bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700">
-                <div className="text-3xl mb-4">⚡</div>
-                <h3 className="text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100">{features.performance.title}</h3>
-                <p className="text-zinc-600 dark:text-zinc-400">{features.performance.description}</p>
+              <div className="group p-6 bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 hover:shadow-xl hover:-translate-y-1 transition-all duration-500 hover:border-blue-500 dark:hover:border-blue-400 cursor-pointer">
+                <div className="text-3xl mb-4 group-hover:scale-125 group-hover:rotate-12 transition-transform duration-500">⚡</div>
+                <h3 className="text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors duration-300">{features.performance.title}</h3>
+                <p className="text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-colors duration-300">{features.performance.description}</p>
               </div>
-              <div className="p-6 bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700">
-                <div className="text-3xl mb-4">🚀</div>
-                <h3 className="text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100">{features.scalable.title}</h3>
-                <p className="text-zinc-600 dark:text-zinc-400">{features.scalable.description}</p>
+              <div className="group p-6 bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 hover:shadow-xl hover:-translate-y-1 transition-all duration-500 hover:border-blue-500 dark:hover:border-blue-400 cursor-pointer">
+                <div className="text-3xl mb-4 group-hover:scale-125 group-hover:rotate-12 transition-transform duration-500">🚀</div>
+                <h3 className="text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors duration-300">{features.scalable.title}</h3>
+                <p className="text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-colors duration-300">{features.scalable.description}</p>
               </div>
-              <div className="p-6 bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700">
-                <div className="text-3xl mb-4">🔒</div>
-                <h3 className="text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100">{features.secure.title}</h3>
-                <p className="text-zinc-600 dark:text-zinc-400">{features.secure.description}</p>
+              <div className="group p-6 bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 hover:shadow-xl hover:-translate-y-1 transition-all duration-500 hover:border-blue-500 dark:hover:border-blue-400 cursor-pointer">
+                <div className="text-3xl mb-4 group-hover:scale-125 group-hover:rotate-12 transition-transform duration-500">🔒</div>
+                <h3 className="text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors duration-300">{features.secure.title}</h3>
+                <p className="text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-colors duration-300">{features.secure.description}</p>
               </div>
             </div>
             ) : null}
@@ -300,7 +301,7 @@ export default function Home() {
               {portfolio.map((item) => (
                 <div
                   key={item.id}
-                  className="bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 overflow-hidden hover:shadow-lg transition-shadow"
+                  className="group bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 overflow-hidden hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 hover:scale-[1.02] cursor-pointer"
                 >
                   {item.image_url && (
                     <div className="w-full h-40 sm:h-48 bg-zinc-200 dark:bg-zinc-700 relative overflow-hidden">
@@ -308,35 +309,38 @@ export default function Home() {
                         src={item.image_url}
                         alt={item.title}
                         fill
-                        className="object-cover"
+                        className="object-cover group-hover:scale-110 transition-transform duration-700 ease-out"
                         unoptimized
                       />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/0 to-black/0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                      <div className="absolute inset-0 bg-blue-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-500 mix-blend-overlay"></div>
                     </div>
                   )}
-                  <div className="p-4 sm:p-6">
-                    <h3 className="text-lg sm:text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100">
+                  <div className="p-4 sm:p-6 relative">
+                    <h3 className="text-lg sm:text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors duration-300">
                       {item.title}
                     </h3>
-                    <p className="text-zinc-600 dark:text-zinc-400 mb-4 text-sm">
+                    <p className="text-zinc-600 dark:text-zinc-400 mb-4 text-sm group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-colors duration-300">
                       {item.description}
                     </p>
                     <div className="flex flex-wrap gap-2 mb-4">
-                      {item.technologies.map((tech) => (
+                      {item.technologies.map((tech, idx) => (
                         <span
                           key={tech}
-                          className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded"
+                          className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded group-hover:bg-blue-600 group-hover:text-white dark:group-hover:bg-blue-500 transition-all duration-300 transform group-hover:scale-105"
+                          style={{ transitionDelay: `${idx * 50}ms` }}
                         >
                           {tech}
                         </span>
                       ))}
                     </div>
-                    <div className="flex flex-wrap gap-3">
+                    <div className="flex flex-wrap gap-3 opacity-80 group-hover:opacity-100 transition-opacity duration-300">
                       {item.github_url && (
                         <a
                           href={item.github_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline hover:translate-x-1 transition-all duration-300 inline-block"
                         >
                           {t.portfolio.viewGithub}
                         </a>
@@ -346,7 +350,7 @@ export default function Home() {
                           href={item.live_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline hover:translate-x-1 transition-all duration-300 inline-block"
                         >
                           {t.portfolio.viewDemo}
                         </a>
