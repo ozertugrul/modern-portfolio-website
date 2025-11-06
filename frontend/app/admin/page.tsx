@@ -183,6 +183,10 @@ export default function AdminPanel() {
   // Contacts state
   const [contacts, setContacts] = useState<ContactMessage[]>([]);
   const [selectedContact, setSelectedContact] = useState<ContactMessage | null>(null);
+  const [replyMode, setReplyMode] = useState(false);
+  const [replySubject, setReplySubject] = useState('');
+  const [replyMessage, setReplyMessage] = useState('');
+  const [sendingEmail, setSendingEmail] = useState(false);
   
   // Logs state
   const [logs, setLogs] = useState<any[]>([]);
@@ -993,27 +997,128 @@ Redis"
                         {selectedContact.message}
                       </p>
                     </div>
+                    
+                    {/* Reply Form */}
+                    {replyMode && (
+                      <div className="mt-6 pt-6 border-t border-zinc-200 dark:border-zinc-700 space-y-4">
+                        <h4 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Yanıt Gönder</h4>
+                        <div>
+                          <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                            Konu
+                          </label>
+                          <input
+                            type="text"
+                            value={replySubject}
+                            onChange={(e) => setReplySubject(e.target.value)}
+                            placeholder="Re: Mesaj konusu"
+                            className="w-full p-3 border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
+                            Mesaj
+                          </label>
+                          <textarea
+                            value={replyMessage}
+                            onChange={(e) => setReplyMessage(e.target.value)}
+                            rows={6}
+                            placeholder="Yanıtınızı yazın..."
+                            className="w-full p-3 border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100"
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={async () => {
+                              if (!replySubject.trim() || !replyMessage.trim()) {
+                                alert('Lütfen konu ve mesaj alanlarını doldurun!');
+                                return;
+                              }
+                              
+                              setSendingEmail(true);
+                              try {
+                                const res = await fetch('/api/admin/contacts/reply', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({
+                                    contact_id: selectedContact.id,
+                                    subject: replySubject,
+                                    message: replyMessage
+                                  })
+                                });
+                                
+                                if (res.ok) {
+                                  alert('Email başarıyla gönderildi!');
+                                  setReplyMode(false);
+                                  setReplySubject('');
+                                  setReplyMessage('');
+                                } else {
+                                  alert('Email gönderme hatası! SMTP ayarlarını kontrol edin.');
+                                }
+                              } catch (error) {
+                                console.error('Send email error:', error);
+                                alert('Email gönderme hatası!');
+                              } finally {
+                                setSendingEmail(false);
+                              }
+                            }}
+                            disabled={sendingEmail}
+                            className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white rounded-lg transition-colors"
+                          >
+                            {sendingEmail ? '📧 Gönderiliyor...' : '📧 Gönder'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setReplyMode(false);
+                              setReplySubject('');
+                              setReplyMessage('');
+                            }}
+                            className="px-4 py-2 bg-zinc-500 hover:bg-zinc-600 text-white rounded-lg transition-colors"
+                          >
+                            İptal
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="p-6 border-t border-zinc-200 dark:border-zinc-700 flex justify-between items-center">
-                    <button
-                      onClick={async () => {
-                        if (confirm('Bu mesajı silmek istediğinizden emin misiniz?')) {
-                          try {
-                            await fetch(`/api/admin/contacts/delete?id=${selectedContact.id}`, { method: 'DELETE' });
-                            setSelectedContact(null);
-                            loadData();
-                          } catch (error) {
-                            console.error('Delete error:', error);
-                            alert('Silme hatası!');
+                    <div className="flex gap-2">
+                      <button
+                        onClick={async () => {
+                          if (confirm('Bu mesajı silmek istediğinizden emin misiniz?')) {
+                            try {
+                              await fetch(`/api/admin/contacts/delete?id=${selectedContact.id}`, { method: 'DELETE' });
+                              setSelectedContact(null);
+                              setReplyMode(false);
+                              loadData();
+                            } catch (error) {
+                              console.error('Delete error:', error);
+                              alert('Silme hatası!');
+                            }
                           }
-                        }
-                      }}
-                      className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
-                    >
-                      🗑️ Sil
-                    </button>
+                        }}
+                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                      >
+                        🗑️ Sil
+                      </button>
+                      {!replyMode && (
+                        <button
+                          onClick={() => {
+                            setReplyMode(true);
+                            setReplySubject(`Re: ${selectedContact.name} - İletişim`);
+                          }}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                        >
+                          📧 Yanıtla
+                        </button>
+                      )}
+                    </div>
                     <button
-                      onClick={() => setSelectedContact(null)}
+                      onClick={() => {
+                        setSelectedContact(null);
+                        setReplyMode(false);
+                        setReplySubject('');
+                        setReplyMessage('');
+                      }}
                       className="px-4 py-2 bg-zinc-600 hover:bg-zinc-700 text-white rounded-lg transition-colors"
                     >
                       Kapat

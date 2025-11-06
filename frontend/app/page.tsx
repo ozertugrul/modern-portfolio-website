@@ -4,6 +4,7 @@ import { useEffect, useState, ReactElement } from 'react';
 import Image from 'next/image';
 import { useLocale } from '@/contexts/LocaleContext';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 interface PortfolioItem {
   id: string;
@@ -263,8 +264,9 @@ export default function Home() {
                 ))}
               </div>
             </div>
-            {/* Language Switcher */}
-            <div className="flex-shrink-0">
+            {/* Theme & Language Switcher */}
+            <div className="flex-shrink-0 flex items-center gap-2">
+              <ThemeToggle />
               <LanguageSwitcher />
             </div>
           </div>

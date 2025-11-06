@@ -15,6 +15,9 @@ use anyhow::Result;
 use tower_http::cors::CorsLayer;
 use redis::Client as RedisClient;
 use uuid::Uuid;
+use lettre::{Message, SmtpTransport, Transport};
+use lettre::message::{header, MultiPart, SinglePart};
+use lettre::transport::smtp::authentication::Credentials;
 
 // Data structures
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1038,6 +1041,94 @@ async fn admin_delete_contact(
     Ok(Json(serde_json::json!({"success": true})))
 }
 
+// Admin: Reply to contact
+#[derive(Deserialize)]
+struct EmailReplyRequest {
+    contact_id: String,
+    subject: String,
+    message: String,
+}
+
+async fn admin_reply_contact(
+    session: ReadableSession,
+    Extension(state): Extension<AppState>,
+    Json(payload): Json<EmailReplyRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_admin(session).await?;
+    
+    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Get contact info
+    let data: Option<String> = redis::cmd("GET")
+        .arg(REDIS_CONTACTS_KEY)
+        .query_async(&mut conn)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let contacts: Vec<ContactRequest> = if let Some(json_str) = data {
+        serde_json::from_str(&json_str).unwrap_or_else(|_| vec![])
+    } else {
+        vec![]
+    };
+    
+    let contact = contacts.iter().find(|c| c.id == payload.contact_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    
+    // Email configuration from env
+    let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "mailserver".to_string());
+    let smtp_port = env::var("SMTP_PORT").unwrap_or_else(|_| "587".to_string())
+        .parse::<u16>().unwrap_or(587);
+    let smtp_user = env::var("SMTP_USER").unwrap_or_else(|_| "info@ozertugrul.com.tr".to_string());
+    let smtp_pass = env::var("SMTP_PASSWORD").unwrap_or_default();
+    
+    // Build email
+    let email = Message::builder()
+        .from(smtp_user.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+        .to(contact.email.parse().map_err(|_| StatusCode::BAD_REQUEST)?)
+        .subject(&payload.subject)
+        .multipart(
+            MultiPart::alternative()
+                .singlepart(
+                    SinglePart::builder()
+                        .header(header::ContentType::TEXT_PLAIN)
+                        .body(payload.message.clone())
+                )
+                .singlepart(
+                    SinglePart::builder()
+                        .header(header::ContentType::TEXT_HTML)
+                        .body(format!(
+                            "<html><body><p>{}</p></body></html>",
+                            payload.message.replace("\n", "<br>")
+                        ))
+                )
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Send email with or without authentication
+    let mailer = if smtp_pass.is_empty() {
+        // No authentication (for local mail servers like Postfix)
+        SmtpTransport::relay(&smtp_host)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .port(smtp_port)
+            .build()
+    } else {
+        // With authentication (for external SMTP like Gmail)
+        let creds = Credentials::new(smtp_user.clone(), smtp_pass);
+        SmtpTransport::relay(&smtp_host)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .port(smtp_port)
+            .credentials(creds)
+            .build()
+    };
+    
+    mailer.send(&email).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Email sent successfully"
+    })))
+}
+
 // Admin: Password management
 async fn admin_get_password_info(
     session: ReadableSession,
@@ -1424,6 +1515,7 @@ async fn main() -> Result<()> {
         .route("/api/admin/contacts", get(admin_get_contacts))
         .route("/api/admin/contacts/read", put(admin_mark_contact_read))
         .route("/api/admin/contacts/delete", delete(admin_delete_contact))
+        .route("/api/admin/contacts/reply", post(admin_reply_contact))
         .route("/api/admin/password", get(admin_get_password_info))
         .route("/api/admin/password", put(admin_change_password))
         .route("/api/admin/translations", get(admin_get_translations))
