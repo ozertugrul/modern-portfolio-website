@@ -13,6 +13,8 @@ interface PortfolioItem {
   image_url?: string;
   github_url?: string;
   live_url?: string;
+  huggingface_url?: string;
+  order?: number;
 }
 
 interface About {
@@ -28,11 +30,26 @@ interface About {
 interface Resume {
   id: string;
   personal_info: PersonalInfo;
+  summary?: string;
+  summary_enabled: boolean;
+  skills: string[];
+  skills_enabled: boolean;
   education: Education[];
+  education_enabled: boolean;
   experience: Experience[];
+  experience_enabled: boolean;
   projects: ResumeProject[];
+  projects_enabled: boolean;
   languages: string[];
+  languages_enabled: boolean;
   certifications: Certification[];
+  certifications_enabled: boolean;
+  awards: Award[];
+  awards_enabled: boolean;
+  publications: Publication[];
+  publications_enabled: boolean;
+  volunteer: Volunteer[];
+  volunteer_enabled: boolean;
 }
 
 interface PersonalInfo {
@@ -41,8 +58,10 @@ interface PersonalInfo {
   email: string;
   phone?: string;
   location?: string;
+  website?: string;
   github?: string;
   linkedin?: string;
+  twitter?: string;
 }
 
 interface Education {
@@ -52,6 +71,7 @@ interface Education {
   field?: string;
   start_date: string;
   end_date?: string;
+  gpa?: string;
   description?: string;
 }
 
@@ -59,9 +79,12 @@ interface Experience {
   id: string;
   company: string;
   position: string;
+  location?: string;
   start_date: string;
   end_date?: string;
+  current: boolean;
   description: string;
+  achievements: string[];
   technologies: string[];
 }
 
@@ -69,6 +92,9 @@ interface ResumeProject {
   id: string;
   name: string;
   description: string;
+  role?: string;
+  start_date?: string;
+  end_date?: string;
   technologies: string[];
   url?: string;
 }
@@ -78,7 +104,36 @@ interface Certification {
   name: string;
   issuer: string;
   date: string;
+  expiry_date?: string;
+  credential_id?: string;
   url?: string;
+}
+
+interface Award {
+  id: string;
+  title: string;
+  issuer: string;
+  date: string;
+  description?: string;
+}
+
+interface Publication {
+  id: string;
+  title: string;
+  publisher: string;
+  date: string;
+  authors: string[];
+  url?: string;
+  description?: string;
+}
+
+interface Volunteer {
+  id: string;
+  organization: string;
+  role: string;
+  start_date: string;
+  end_date?: string;
+  description: string;
 }
 
 interface ContactMessage {
@@ -96,7 +151,7 @@ export default function AdminPanel() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [password, setPassword] = useState('');
-  const [activeTab, setActiveTab] = useState<'portfolio' | 'about' | 'resume' | 'contacts' | 'password' | 'translations' | 'footer' | 'features'>('portfolio');
+  const [activeTab, setActiveTab] = useState<'portfolio' | 'about' | 'resume' | 'contacts' | 'password' | 'translations' | 'footer' | 'features' | 'logs' | 'backups'>('portfolio');
   
   // Portfolio state
   const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
@@ -111,6 +166,16 @@ export default function AdminPanel() {
   // Contacts state
   const [contacts, setContacts] = useState<ContactMessage[]>([]);
   const [selectedContact, setSelectedContact] = useState<ContactMessage | null>(null);
+  
+  // Logs state
+  const [logs, setLogs] = useState<any[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  
+  // Backups state
+  const [backups, setBackups] = useState<any[]>([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
+  const [editingBackup, setEditingBackup] = useState<string | null>(null);
+  const [newBackupName, setNewBackupName] = useState('');
   
   // Footer state
   const [footer, setFooter] = useState<{ text_tr: string; text_en: string; enabled: boolean }>({ text_tr: '', text_en: '', enabled: true });
@@ -173,6 +238,38 @@ export default function AdminPanel() {
       if (res.ok) {
         const data = await res.json();
         setContacts(data);
+      }
+    } else if (activeTab === 'logs') {
+      setLogsLoading(true);
+      try {
+        const res = await fetch('/api/admin/logs');
+        if (res.ok) {
+          const data = await res.json();
+          setLogs(data);
+        } else {
+          setLogs([]);
+        }
+      } catch (error) {
+        console.error('Logs fetch error:', error);
+        setLogs([]);
+      } finally {
+        setLogsLoading(false);
+      }
+    } else if (activeTab === 'backups') {
+      setBackupsLoading(true);
+      try {
+        const res = await fetch('/api/admin/backups');
+        if (res.ok) {
+          const data = await res.json();
+          setBackups(data);
+        } else {
+          setBackups([]);
+        }
+      } catch (error) {
+        console.error('Backup list error:', error);
+        setBackups([]);
+      } finally {
+        setBackupsLoading(false);
       }
     } else if (activeTab === 'password') {
       const res = await fetch('/api/admin/password');
@@ -442,7 +539,7 @@ export default function AdminPanel() {
       {/* Tabs */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="flex gap-4 mb-6 border-b border-zinc-200 dark:border-zinc-700 overflow-x-auto">
-          {(['portfolio', 'about', 'resume', 'contacts', 'password', 'translations', 'footer', 'features'] as const).map((tab) => (
+          {(['portfolio', 'about', 'resume', 'contacts', 'logs', 'backups', 'password', 'translations', 'footer', 'features'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -452,11 +549,13 @@ export default function AdminPanel() {
                   : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
               }`}
             >
-              {tab === 'password' ? t.admin.tabs.password || 'Şifre' : 
-               tab === 'translations' ? t.admin.tabs.translations || 'Çeviriler' :
-               tab === 'footer' ? t.admin.tabs.footer || 'Footer' :
-               tab === 'features' ? t.admin.tabs.features || 'Özellikler' :
-               t.admin.tabs[tab]}
+              {tab === 'password' ? 'Şifre' : 
+               tab === 'translations' ? 'Çeviriler' :
+               tab === 'footer' ? 'Footer' :
+               tab === 'features' ? 'Özellikler' :
+               tab === 'logs' ? '📊 Loglar' :
+               tab === 'backups' ? '💾 Yedekler' :
+               tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
         </div>
@@ -475,6 +574,8 @@ export default function AdminPanel() {
                   image_url: '',
                   github_url: '',
                   live_url: '',
+                  huggingface_url: '',
+                  order: portfolio.length,
                 })}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
               >
@@ -491,18 +592,88 @@ export default function AdminPanel() {
             )}
 
             <div className="grid md:grid-cols-2 gap-4">
-              {portfolio.map((item) => (
-                <div key={item.id} className="bg-white dark:bg-zinc-800 p-4 rounded-lg border border-zinc-200 dark:border-zinc-700">
-                  <h3 className="font-semibold text-lg mb-2 text-zinc-900 dark:text-zinc-100">{item.title}</h3>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-4">{item.description}</p>
-                  <div className="flex gap-2 mb-4">
+              {portfolio.map((item, index) => (
+                <div key={item.id} className="bg-white dark:bg-zinc-800 p-4 rounded-lg border border-zinc-200 dark:border-zinc-700 relative">
+                  {/* Order Controls */}
+                  <div className="absolute top-2 right-2 flex gap-1">
+                    <button
+                      onClick={async () => {
+                        if (index === 0) return;
+                        const newPortfolio = [...portfolio];
+                        [newPortfolio[index], newPortfolio[index - 1]] = [newPortfolio[index - 1], newPortfolio[index]];
+                        
+                        // Update order values
+                        const updatedPortfolio = newPortfolio.map((item, idx) => ({
+                          ...item,
+                          order: idx
+                        }));
+                        
+                        setPortfolio(updatedPortfolio);
+                        
+                        // Save to backend
+                        try {
+                          for (const item of updatedPortfolio) {
+                            await fetch('/api/admin/portfolio', {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(item)
+                            });
+                          }
+                        } catch (error) {
+                          console.error('Failed to update order:', error);
+                        }
+                      }}
+                      disabled={index === 0}
+                      className="w-7 h-7 bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 rounded hover:bg-zinc-300 dark:hover:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-xs font-bold"
+                      title="Move Up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (index === portfolio.length - 1) return;
+                        const newPortfolio = [...portfolio];
+                        [newPortfolio[index], newPortfolio[index + 1]] = [newPortfolio[index + 1], newPortfolio[index]];
+                        
+                        // Update order values
+                        const updatedPortfolio = newPortfolio.map((item, idx) => ({
+                          ...item,
+                          order: idx
+                        }));
+                        
+                        setPortfolio(updatedPortfolio);
+                        
+                        // Save to backend
+                        try {
+                          for (const item of updatedPortfolio) {
+                            await fetch('/api/admin/portfolio', {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(item)
+                            });
+                          }
+                        } catch (error) {
+                          console.error('Failed to update order:', error);
+                        }
+                      }}
+                      disabled={index === portfolio.length - 1}
+                      className="w-7 h-7 bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 rounded hover:bg-zinc-300 dark:hover:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-xs font-bold"
+                      title="Move Down"
+                    >
+                      ↓
+                    </button>
+                  </div>
+
+                  <h3 className="font-semibold text-lg mb-2 text-zinc-900 dark:text-zinc-100 line-clamp-1 pr-20">{item.title}</h3>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-4 line-clamp-2">{item.description}</p>
+                  <div className="flex flex-wrap gap-2 mb-4 max-h-20 overflow-y-auto">
                     {item.technologies.map((tech) => (
-                      <span key={tech} className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded">
+                      <span key={tech} className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded whitespace-nowrap">
                         {tech}
                       </span>
                     ))}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     <button
                       onClick={() => setEditingPortfolio(item)}
                       className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
@@ -1070,6 +1241,224 @@ Redis"
             )}
           </div>
         )}
+
+        {/* Logs Tab */}
+        {activeTab === 'logs' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-bold">📊 Ziyaretçi Logları</h2>
+              <button
+                onClick={loadData}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                🔄 Yenile
+              </button>
+            </div>
+            
+            {logsLoading ? (
+              <p>Yükleniyor...</p>
+            ) : logs.length === 0 ? (
+              <p className="text-zinc-600 dark:text-zinc-400">Henüz log kaydı yok.</p>
+            ) : (
+              <div className="bg-white dark:bg-zinc-800 rounded-lg overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-zinc-100 dark:bg-zinc-700">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-medium">IP</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Method</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Path</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">User Agent</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium">Zaman</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700">
+                    {logs.map((log, idx) => (
+                      <tr key={idx} className="hover:bg-zinc-50 dark:hover:bg-zinc-700/50">
+                        <td className="px-4 py-3 text-sm font-mono">{log.ip}</td>
+                        <td className="px-4 py-3 text-sm">
+                          <span className={`px-2 py-1 rounded text-xs ${
+                            log.method === 'GET' ? 'bg-green-100 text-green-700' :
+                            log.method === 'POST' ? 'bg-blue-100 text-blue-700' :
+                            'bg-gray-100 text-gray-700'
+                          }`}>
+                            {log.method}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm font-mono truncate max-w-xs">{log.path}</td>
+                        <td className="px-4 py-3 text-sm truncate max-w-xs">{log.user_agent || '-'}</td>
+                        <td className="px-4 py-3 text-sm">{new Date(log.timestamp).toLocaleString('tr-TR')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Backups Tab */}
+        {activeTab === 'backups' && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h2 className="text-2xl font-bold">💾 Redis Yedekleri</h2>
+              <div className="flex gap-3">
+                <button
+                  onClick={loadData}
+                  className="px-4 py-2 bg-zinc-600 text-white rounded-lg hover:bg-zinc-700"
+                >
+                  🔄 Yenile
+                </button>
+                <button
+                  onClick={async () => {
+                    if (confirm('Yeni yedek oluşturulsun mu?')) {
+                      try {
+                        const res = await fetch('/api/admin/backups', { method: 'POST' });
+                        if (res.ok) {
+                          alert('Yedek oluşturuldu!');
+                          loadData();
+                        } else {
+                          alert('Hata: ' + (await res.text()));
+                        }
+                      } catch (error) {
+                        alert('Yedekleme hatası!');
+                      }
+                    }
+                  }}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                >
+                  ➕ Yeni Yedek Oluştur
+                </button>
+              </div>
+            </div>
+            
+            {backupsLoading ? (
+              <p>Yükleniyor...</p>
+            ) : backups.length === 0 ? (
+              <p className="text-zinc-600 dark:text-zinc-400">Henüz yedek bulunmuyor.</p>
+            ) : (
+              <div className="grid gap-4">
+                {backups.map((backup, idx) => (
+                  <div key={idx} className="bg-white dark:bg-zinc-800 p-4 rounded-lg border border-zinc-200 dark:border-zinc-700">
+                    {editingBackup === backup.filename ? (
+                      <div className="space-y-3">
+                        <input
+                          type="text"
+                          value={newBackupName}
+                          onChange={(e) => setNewBackupName(e.target.value)}
+                          placeholder="Yeni isim"
+                          className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={async () => {
+                              try {
+                                const res = await fetch('/api/admin/backups/rename', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ 
+                                    old_filename: backup.filename,
+                                    new_name: newBackupName 
+                                  })
+                                });
+                                if (res.ok) {
+                                  alert('Yedek yeniden adlandırıldı!');
+                                  setEditingBackup(null);
+                                  setNewBackupName('');
+                                  loadData();
+                                } else {
+                                  alert('Hata: ' + (await res.text()));
+                                }
+                              } catch (error) {
+                                alert('Yeniden adlandırma hatası!');
+                              }
+                            }}
+                            className="px-3 py-1 bg-green-600 text-white rounded text-sm hover:bg-green-700"
+                          >
+                            ✓ Kaydet
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingBackup(null);
+                              setNewBackupName('');
+                            }}
+                            className="px-3 py-1 bg-gray-600 text-white rounded text-sm hover:bg-gray-700"
+                          >
+                            ✕ İptal
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <p className="font-semibold">{backup.filename}</p>
+                          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                            Boyut: {(backup.size / 1024).toFixed(2)} KB • 
+                            Tarih: {new Date(backup.created_at).toLocaleString('tr-TR')}
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setEditingBackup(backup.filename);
+                              setNewBackupName(backup.filename.replace('.json', ''));
+                            }}
+                            className="px-3 py-1 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-700"
+                          >
+                            ✏️ Yeniden Adlandır
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (confirm(`${backup.filename} yedeğini geri yükle?  TÜM MEVCUT VERİLER SİLİNECEK!`)) {
+                                try {
+                                  const res = await fetch('/api/admin/backups/restore', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ filename: backup.filename })
+                                  });
+                                  if (res.ok) {
+                                    alert('Yedek geri yüklendi! Sayfa yenileniyor...');
+                                    window.location.reload();
+                                  } else {
+                                    alert('Hata: ' + (await res.text()));
+                                  }
+                                } catch (error) {
+                                  alert('Geri yükleme hatası!');
+                                }
+                              }
+                            }}
+                            className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                          >
+                            ↻ Geri Yükle
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (confirm(`${backup.filename} silinsin mi?`)) {
+                                try {
+                                  const res = await fetch(`/api/admin/backups/${backup.filename}`, { method: 'DELETE' });
+                                  if (res.ok) {
+                                    alert('Yedek silindi!');
+                                    loadData();
+                                  } else {
+                                    alert('Hata: ' + (await res.text()));
+                                  }
+                                } catch (error) {
+                                  alert('Silme hatası!');
+                                }
+                              }
+                            }}
+                            className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+                          >
+                            🗑️ Sil
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1133,6 +1522,13 @@ PostgreSQL"
         placeholder={t.admin.portfolio.projectEditor.liveUrlPlaceholder}
         value={form.live_url || ''}
         onChange={(e) => setForm({ ...form, live_url: e.target.value || undefined })}
+        className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
+      />
+      <input
+        type="url"
+        placeholder="Hugging Face URL (optional)"
+        value={form.huggingface_url || ''}
+        onChange={(e) => setForm({ ...form, huggingface_url: e.target.value || undefined })}
         className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
       />
       <div className="flex gap-2">

@@ -15,8 +15,10 @@ RUN mkdir src && \
 # Sonra gerçek kaynak kodları kopyala
 COPY src ./src
 
-# Binary'yi yeniden compile et (touch main.rs to invalidate cache)
-RUN touch src/main.rs && cargo build --release
+# Binary'yi yeniden compile et (force recompilation)
+RUN rm -rf target/release/.fingerprint/backend-* target/release/deps/backend* && \
+    touch src/main.rs && \
+    cargo build --release
 
 # --- Çalışma aşaması ---
 FROM debian:bookworm-slim

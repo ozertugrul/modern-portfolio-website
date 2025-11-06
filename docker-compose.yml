@@ -49,6 +49,8 @@ services:
     restart: unless-stopped
     networks:
       - portfolio-network
+    volumes:
+      - backup-data:/data/backups
     # Health check
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
@@ -69,6 +71,8 @@ services:
     restart: unless-stopped
     networks:
       - portfolio-network
+    volumes:
+      - backup-data:/data/backups
     # Health check
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
@@ -79,6 +83,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
     ports:
       - "6379:6379"
     restart: unless-stopped
@@ -90,7 +95,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-    # Persistence i?in volume (opsiyonel)
+    # Persistence için volume
     volumes:
       - redis-data:/data
 
@@ -100,3 +105,4 @@ networks:
 
 volumes:
   redis-data:
+  backup-data:

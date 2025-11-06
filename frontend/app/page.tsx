@@ -13,6 +13,8 @@ interface PortfolioItem {
   image_url?: string;
   github_url?: string;
   live_url?: string;
+  huggingface_url?: string;
+  order?: number;
 }
 
 interface About {
@@ -86,6 +88,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'home' | 'portfolio' | 'about' | 'resume' | 'contact'>('home');
   const [contactForm, setContactForm] = useState({ name: '', email: '', message: '' });
   const [submitted, setSubmitted] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<PortfolioItem | null>(null);
 
   useEffect(() => {
     fetch('/api/portfolio')
@@ -301,7 +304,8 @@ export default function Home() {
               {portfolio.map((item) => (
                 <div
                   key={item.id}
-                  className="group bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 overflow-hidden hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 hover:scale-[1.02] cursor-pointer"
+                  onClick={() => setSelectedProject(item)}
+                  className="group bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 overflow-hidden hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 hover:scale-[1.02] cursor-pointer flex flex-col"
                 >
                   {item.image_url && (
                     <div className="w-full h-40 sm:h-48 bg-zinc-200 dark:bg-zinc-700 relative overflow-hidden">
@@ -316,25 +320,25 @@ export default function Home() {
                       <div className="absolute inset-0 bg-blue-600/20 opacity-0 group-hover:opacity-100 transition-opacity duration-500 mix-blend-overlay"></div>
                     </div>
                   )}
-                  <div className="p-4 sm:p-6 relative">
-                    <h3 className="text-lg sm:text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors duration-300">
+                  <div className="p-4 sm:p-6 relative flex flex-col h-full">
+                    <h3 className="text-lg sm:text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors duration-300 line-clamp-2">
                       {item.title}
                     </h3>
-                    <p className="text-zinc-600 dark:text-zinc-400 mb-4 text-sm group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-colors duration-300">
+                    <p className="text-zinc-600 dark:text-zinc-400 mb-4 text-sm group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-colors duration-300 line-clamp-3">
                       {item.description}
                     </p>
-                    <div className="flex flex-wrap gap-2 mb-4">
+                    <div className="flex flex-wrap gap-2 mb-4 min-h-[60px]">
                       {item.technologies.map((tech, idx) => (
                         <span
                           key={tech}
-                          className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded group-hover:bg-blue-600 group-hover:text-white dark:group-hover:bg-blue-500 transition-all duration-300 transform group-hover:scale-105"
+                          className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded group-hover:bg-blue-600 group-hover:text-white dark:group-hover:bg-blue-500 transition-all duration-300 transform group-hover:scale-105 h-fit"
                           style={{ transitionDelay: `${idx * 50}ms` }}
                         >
                           {tech}
                         </span>
                       ))}
                     </div>
-                    <div className="flex flex-wrap gap-3 opacity-80 group-hover:opacity-100 transition-opacity duration-300">
+                    <div className="flex flex-wrap gap-3 opacity-80 group-hover:opacity-100 transition-opacity duration-300 mt-auto pt-2 border-t border-zinc-200 dark:border-zinc-700">
                       {item.github_url && (
                         <a
                           href={item.github_url}
@@ -355,11 +359,118 @@ export default function Home() {
                           {t.portfolio.viewDemo}
                         </a>
                       )}
+                      {item.huggingface_url && (
+                        <a
+                          href={item.huggingface_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-yellow-600 dark:text-yellow-400 hover:underline hover:translate-x-1 transition-all duration-300 inline-block"
+                        >
+                          🤗 HuggingFace
+                        </a>
+                      )}
                     </div>
                   </div>
                 </div>
               ))}
             </div>
+
+            {/* Project Detail Modal */}
+            {selectedProject && (
+              <div
+                className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn"
+                onMouseLeave={() => setSelectedProject(null)}
+                onClick={(e) => {
+                  if (e.target === e.currentTarget) setSelectedProject(null);
+                }}
+              >
+                <div
+                  className="bg-white dark:bg-zinc-800 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto animate-slideUp relative"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Project Image */}
+                  {selectedProject.image_url && (
+                    <div className="w-full h-64 sm:h-96 bg-zinc-200 dark:bg-zinc-700 relative">
+                      <Image
+                        src={selectedProject.image_url}
+                        alt={selectedProject.title}
+                        fill
+                        className="object-cover"
+                        unoptimized
+                      />
+                    </div>
+                  )}
+
+                  {/* Content */}
+                  <div className="p-6 sm:p-8">
+                    <h2 className="text-3xl sm:text-4xl font-bold text-zinc-900 dark:text-zinc-100 mb-4">
+                      {selectedProject.title}
+                    </h2>
+
+                    <div className="flex flex-wrap gap-2 mb-6">
+                      {selectedProject.technologies.map((tech) => (
+                        <span
+                          key={tech}
+                          className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-full"
+                        >
+                          {tech}
+                        </span>
+                      ))}
+                    </div>
+
+                    <div className="prose dark:prose-invert max-w-none mb-8">
+                      <p className="text-lg text-zinc-700 dark:text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {selectedProject.description}
+                      </p>
+                    </div>
+
+                    {/* Links */}
+                    <div className="flex flex-wrap gap-4 pt-6 border-t border-zinc-200 dark:border-zinc-700">
+                      {selectedProject.github_url && (
+                        <a
+                          href={selectedProject.github_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-6 py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-lg hover:bg-zinc-700 dark:hover:bg-zinc-300 transition-colors font-medium flex items-center gap-2"
+                        >
+                          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+                          </svg>
+                          {t.portfolio.viewGithub}
+                        </a>
+                      )}
+                      {selectedProject.live_url && (
+                        <a
+                          href={selectedProject.live_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center gap-2"
+                        >
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                          </svg>
+                          {t.portfolio.viewDemo}
+                        </a>
+                      )}
+                      {selectedProject.huggingface_url && (
+                        <a
+                          href={selectedProject.huggingface_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-6 py-3 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors font-medium flex items-center gap-2"
+                        >
+                          <svg className="w-5 h-5" viewBox="0 0 95 88" fill="currentColor">
+                            <path d="M47.21 73.94c-12.89 0-23.34-10.45-23.34-23.34s10.45-23.34 23.34-23.34 23.34 10.45 23.34 23.34-10.45 23.34-23.34 23.34zm0-41.94c-10.26 0-18.6 8.34-18.6 18.6s8.34 18.6 18.6 18.6 18.6-8.34 18.6-18.6-8.34-18.6-18.6-18.6z"/>
+                            <path d="M47.21 88C21.17 88 0 66.83 0 40.79S21.17-6.42 47.21-6.42s47.21 21.17 47.21 47.21S73.25 88 47.21 88zm0-89.68C24.05-1.68 4.74 17.63 4.74 40.79s19.31 42.47 42.47 42.47 42.47-19.31 42.47-42.47S70.37-1.68 47.21-1.68z"/>
+                          </svg>
+                          🤗 Hugging Face
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

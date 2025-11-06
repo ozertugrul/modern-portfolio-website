@@ -26,6 +26,8 @@ struct PortfolioItem {
     image_url: Option<String>,
     github_url: Option<String>,
     live_url: Option<String>,
+    huggingface_url: Option<String>,
+    order: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -43,11 +45,26 @@ struct About {
 struct Resume {
     id: String,
     personal_info: PersonalInfo,
+    summary: Option<String>,
+    summary_enabled: bool,
+    skills: Vec<String>,
+    skills_enabled: bool,
     education: Vec<Education>,
+    education_enabled: bool,
     experience: Vec<Experience>,
+    experience_enabled: bool,
     projects: Vec<ResumeProject>,
+    projects_enabled: bool,
     languages: Vec<String>,
+    languages_enabled: bool,
     certifications: Vec<Certification>,
+    certifications_enabled: bool,
+    awards: Vec<Award>,
+    awards_enabled: bool,
+    publications: Vec<Publication>,
+    publications_enabled: bool,
+    volunteer: Vec<Volunteer>,
+    volunteer_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,8 +74,10 @@ struct PersonalInfo {
     email: String,
     phone: Option<String>,
     location: Option<String>,
+    website: Option<String>,
     github: Option<String>,
     linkedin: Option<String>,
+    twitter: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -69,6 +88,7 @@ struct Education {
     field: Option<String>,
     start_date: String,
     end_date: Option<String>,
+    gpa: Option<String>,
     description: Option<String>,
 }
 
@@ -77,9 +97,12 @@ struct Experience {
     id: String,
     company: String,
     position: String,
+    location: Option<String>,
     start_date: String,
     end_date: Option<String>,
+    current: bool,
     description: String,
+    achievements: Vec<String>,
     technologies: Vec<String>,
 }
 
@@ -88,6 +111,9 @@ struct ResumeProject {
     id: String,
     name: String,
     description: String,
+    role: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
     technologies: Vec<String>,
     url: Option<String>,
 }
@@ -98,7 +124,39 @@ struct Certification {
     name: String,
     issuer: String,
     date: String,
+    expiry_date: Option<String>,
+    credential_id: Option<String>,
     url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct Award {
+    id: String,
+    title: String,
+    issuer: String,
+    date: String,
+    description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct Publication {
+    id: String,
+    title: String,
+    publisher: String,
+    date: String,
+    authors: Vec<String>,
+    url: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct Volunteer {
+    id: String,
+    organization: String,
+    role: String,
+    start_date: String,
+    end_date: Option<String>,
+    description: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -109,6 +167,24 @@ struct ContactRequest {
     message: String,
     created_at: String,
     read: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct VisitorLog {
+    id: String,
+    ip: String,
+    user_agent: Option<String>,
+    path: String,
+    method: String,
+    timestamp: String,
+    referer: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct BackupInfo {
+    filename: String,
+    size: u64,
+    created_at: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -195,10 +271,12 @@ const REDIS_TRANSLATIONS_KEY: &str = "translations:data";
 const REDIS_FOOTER_KEY: &str = "footer:text";
 const REDIS_FEATURES_KEY: &str = "features:data";
 const REDIS_HERO_KEY: &str = "hero:section";
+const REDIS_VISITOR_LOGS_KEY: &str = "logs:visitors";
+
 // Default admin password hash for "admin123" (bcrypt with cost 12)
 // This hash is generated once and stored here as fallback
 // If this hash doesn't work, the system will generate a new one on first login attempt
-const DEFAULT_ADMIN_PASSWORD_HASH: &str = "$2y$12$K1z2YQZ3qCx4Vw5Xy6Zz7.RQhNhU8TvWxYz0AbCdEfGhIjKlMnOp"; // "admin123" - placeholder, will be generated on first run
+const DEFAULT_ADMIN_PASSWORD_HASH: &str = "$2b$12$h7iQNvIPH2LSpzo4hJrKAuXrKBnmk8DMDrAqD.iAx5H.NDasMrhqG"; // "admin123"
 
 // Helper: Check if user is admin
 async fn is_admin(session: ReadableSession) -> bool {
@@ -229,8 +307,12 @@ async fn get_portfolio(Extension(state): Extension<AppState>) -> Result<Json<Vec
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     if let Some(json_str) = data {
-        let items: Vec<PortfolioItem> = serde_json::from_str(&json_str)
+        let mut items: Vec<PortfolioItem> = serde_json::from_str(&json_str)
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        
+        // Sort by order field
+        items.sort_by_key(|item| item.order.unwrap_or(999999));
+        
         Ok(Json(items))
     } else {
         // Default portfolio items
@@ -243,6 +325,8 @@ async fn get_portfolio(Extension(state): Extension<AppState>) -> Result<Json<Vec
                 image_url: Some("https://via.placeholder.com/600x400".to_string()),
                 github_url: Some("https://github.com/example".to_string()),
                 live_url: Some("https://example.com".to_string()),
+                huggingface_url: None,
+                order: Some(0),
             },
         ];
         Ok(Json(default_items))
@@ -307,14 +391,31 @@ async fn get_resume(Extension(state): Extension<AppState>) -> Result<Json<Resume
                 email: "ertu@example.com".to_string(),
                 phone: Some("+90 555 000 0000".to_string()),
                 location: Some("Istanbul, Turkey".to_string()),
+                website: None,
                 github: Some("https://github.com/ertu".to_string()),
                 linkedin: Some("https://linkedin.com/in/ertu".to_string()),
+                twitter: None,
             },
+            summary: Some("Experienced backend developer specializing in Rust and high-performance systems.".to_string()),
+            summary_enabled: true,
+            skills: vec!["Rust".to_string(), "Docker".to_string(), "PostgreSQL".to_string()],
+            skills_enabled: true,
             education: vec![],
+            education_enabled: true,
             experience: vec![],
+            experience_enabled: true,
             projects: vec![],
+            projects_enabled: true,
             languages: vec!["Turkish".to_string(), "English".to_string()],
+            languages_enabled: true,
             certifications: vec![],
+            certifications_enabled: true,
+            awards: vec![],
+            awards_enabled: false,
+            publications: vec![],
+            publications_enabled: false,
+            volunteer: vec![],
+            volunteer_enabled: false,
         };
         Ok(Json(default_resume))
     }
@@ -1097,6 +1198,77 @@ async fn admin_update_hero(
     Ok(Json(hero))
 }
 
+// Visitor logging middleware
+async fn log_visitor(
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next<axum::body::Body>,
+) -> axum::response::Response {
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let user_agent = req.headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let referer = req.headers()
+        .get("referer")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Execute the request
+    let response = next.run(req).await;
+
+    // Log to Redis (fire and forget)
+    let ip = addr.ip().to_string();
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    
+    tokio::spawn(async move {
+        if let Ok(mut conn) = get_redis_conn(&state).await {
+            let log = VisitorLog {
+                id: uuid::Uuid::new_v4().to_string(),
+                ip,
+                user_agent,
+                path,
+                method,
+                timestamp,
+                referer,
+            };
+
+            // Get existing logs
+            let data: Option<String> = redis::cmd("GET")
+                .arg(REDIS_VISITOR_LOGS_KEY)
+                .query_async(&mut conn)
+                .await
+                .ok()
+                .flatten();
+
+            let mut logs: Vec<VisitorLog> = data
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_else(|| vec![]);
+
+            // Add new log
+            logs.push(log);
+
+            // Keep only last 500 logs
+            if logs.len() > 500 {
+                logs.drain(0..logs.len() - 500);
+            }
+
+            // Save back to Redis
+            if let Ok(json_str) = serde_json::to_string(&logs) {
+                let _: Result<(), _> = redis::cmd("SET")
+                    .arg(REDIS_VISITOR_LOGS_KEY)
+                    .arg(&json_str)
+                    .query_async(&mut conn)
+                    .await;
+            }
+        }
+    });
+
+    response
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Tracing setup
@@ -1237,6 +1409,16 @@ async fn main() -> Result<()> {
         .route("/api/admin/features", put(admin_update_features))
         .route("/api/admin/hero", get(admin_get_hero))
         .route("/api/admin/hero", put(admin_update_hero))
+        .route("/api/admin/logs", get(admin_get_logs))
+        .route("/api/admin/backups", get(admin_list_backups))
+        .route("/api/admin/backups", post(admin_create_backup))
+        .route("/api/admin/backups/restore", post(admin_restore_backup))
+        .route("/api/admin/backups/rename", post(admin_rename_backup))
+        .route("/api/admin/backups/:filename", delete(admin_delete_backup))
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            log_visitor
+        ))
         .layer(Extension(app_state))
         .layer(session_layer);
 
@@ -1252,8 +1434,350 @@ async fn main() -> Result<()> {
     tracing::info!("🔐 Admin panel: http://{}/api/admin/login (password: admin123)", addr);
 
     axum::Server::bind(&addr)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .await?;
 
     Ok(())
+}
+
+// ==================== LOGS & BACKUPS ENDPOINTS ====================
+
+// Get visitor logs
+async fn admin_get_logs(
+    session: ReadableSession,
+    Extension(state): Extension<AppState>,
+) -> Result<Json<Vec<VisitorLog>>, StatusCode> {
+    if !is_admin(session).await {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let data: Option<String> = redis::cmd("GET")
+        .arg(REDIS_VISITOR_LOGS_KEY)
+        .query_async(&mut conn)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    if let Some(json_str) = data {
+        let mut logs: Vec<VisitorLog> = serde_json::from_str(&json_str)
+            .unwrap_or_else(|_| vec![]);
+        
+        // Sort by timestamp, newest first
+        logs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        
+        // Return last 100 logs
+        logs.truncate(100);
+        
+        Ok(Json(logs))
+    } else {
+        Ok(Json(vec![]))
+    }
+}
+
+// List backups
+async fn admin_list_backups(
+    session: ReadableSession,
+) -> Result<Json<Vec<BackupInfo>>, StatusCode> {
+    if !is_admin(session).await {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    use std::fs;
+    use std::path::Path;
+
+    let backup_dir = "/data/backups";
+    
+    // Create backup directory if not exists
+    if let Err(_) = fs::create_dir_all(backup_dir) {
+        return Ok(Json(vec![]));
+    }
+
+    let mut backups = vec![];
+    
+    tracing::info!("🔍 Listing backups from: {}", backup_dir);
+    
+    if let Ok(entries) = fs::read_dir(backup_dir) {
+        for entry in entries.flatten() {
+            tracing::info!("📁 Found entry: {:?}", entry.path());
+            if let Ok(metadata) = entry.metadata() {
+                tracing::info!("  - Is file: {}", metadata.is_file());
+                if metadata.is_file() {
+                    if let Some(filename) = entry.file_name().to_str() {
+                        tracing::info!("  - Filename: {}", filename);
+                        if filename.ends_with(".json") {
+                            tracing::info!("  - ✅ Valid JSON backup: {}", filename);
+                            let created_at = metadata.modified()
+                                .ok()
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| chrono::DateTime::from_timestamp(d.as_secs() as i64, 0))
+                                .flatten()
+                                .map(|dt| dt.to_rfc3339())
+                                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
+                            backups.push(BackupInfo {
+                                filename: filename.to_string(),
+                                size: metadata.len(),
+                                created_at,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    tracing::info!("📊 Total backups found: {}", backups.len());
+
+    // Sort by created_at, newest first
+    backups.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+    Ok(Json(backups))
+}
+
+// Create backup
+async fn admin_create_backup(
+    session: ReadableSession,
+    Extension(state): Extension<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !is_admin(session).await {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    use std::fs;
+    use std::path::Path;
+
+    let backup_dir = "/data/backups";
+    fs::create_dir_all(backup_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Trigger Redis BGSAVE
+    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Use BGSAVE instead of SAVE to avoid blocking
+    let _: String = redis::cmd("BGSAVE")
+        .query_async(&mut conn)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Create JSON backup instead of copying RDB
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let backup_filename = format!("backup_{}.json", timestamp);
+    let backup_path = Path::new(backup_dir).join(&backup_filename);
+
+    // Export all Redis data to JSON
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg("*")
+        .query_async(&mut conn)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut backup_data = serde_json::Map::new();
+    
+    for key in keys {
+        let value: Option<String> = redis::cmd("GET")
+            .arg(&key)
+            .query_async(&mut conn)
+            .await
+            .ok()
+            .flatten();
+        
+        if let Some(v) = value {
+            backup_data.insert(key, serde_json::Value::String(v));
+        }
+    }
+
+    let json_str = serde_json::to_string_pretty(&backup_data)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    fs::write(&backup_path, json_str)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "filename": backup_filename
+    })))
+}
+
+// Restore backup
+async fn admin_restore_backup(
+    session: ReadableSession,
+    Extension(state): Extension<AppState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !is_admin(session).await {
+        tracing::warn!("⚠️ Unauthorized restore attempt");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    use std::fs;
+    use std::path::Path;
+
+    let filename = payload.get("filename")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    tracing::info!("🔄 Restoring backup: {}", filename);
+
+    let backup_dir = "/data/backups";
+    let backup_path = Path::new(backup_dir).join(filename);
+
+    if !backup_path.exists() {
+        tracing::error!("❌ Backup file not found: {:?}", backup_path);
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    tracing::info!("📂 Reading backup file...");
+    // Read JSON backup
+    let json_str = fs::read_to_string(&backup_path)
+        .map_err(|e| {
+            tracing::error!("❌ Failed to read backup file: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    tracing::info!("🔍 Parsing JSON ({} bytes)...", json_str.len());
+    let backup_data: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&json_str)
+        .map_err(|e| {
+            tracing::error!("❌ Failed to parse JSON: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!("🗑️ Flushing Redis...");
+    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Flush all current data
+    let _: () = redis::cmd("FLUSHALL")
+        .query_async(&mut conn)
+        .await
+        .map_err(|e| {
+            tracing::error!("❌ FLUSHALL failed: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!("💾 Restoring {} keys...", backup_data.len());
+    // Restore all keys
+    let mut restored = 0;
+    for (key, value) in backup_data {
+        if let Some(v) = value.as_str() {
+            let _: () = redis::cmd("SET")
+                .arg(&key)
+                .arg(v)
+                .query_async(&mut conn)
+                .await
+                .map_err(|e| {
+                    tracing::error!("❌ SET failed for key {}: {:?}", key, e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+            restored += 1;
+        }
+    }
+
+    tracing::info!("✅ Restore complete! {} keys restored", restored);
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Backup restored successfully!"
+    })))
+}
+
+// Delete backup
+async fn admin_delete_backup(
+    session: ReadableSession,
+    axum::extract::Path(filename): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !is_admin(session).await {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    use std::fs;
+    use std::path::Path;
+
+    let backup_dir = "/data/backups";
+    let backup_path = Path::new(backup_dir).join(&filename);
+
+    if !backup_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    if !filename.ends_with(".json") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    fs::remove_file(&backup_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "success": true
+    })))
+}
+
+// Rename backup
+async fn admin_rename_backup(
+    session: ReadableSession,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !is_admin(session).await {
+        tracing::warn!("⚠️ Unauthorized rename attempt");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    use std::fs;
+    use std::path::Path;
+
+    let old_filename = payload.get("old_filename")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    
+    let new_name = payload.get("new_name")
+        .and_then(|v| v.as_str())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Validate new name
+    if new_name.is_empty() || new_name.len() > 100 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Add .json extension if not present
+    let new_filename = if new_name.ends_with(".json") {
+        new_name.to_string()
+    } else {
+        format!("{}.json", new_name)
+    };
+
+    // Sanitize filename (remove dangerous characters)
+    let safe_new_filename = new_filename
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+        .collect::<String>();
+
+    if safe_new_filename.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    tracing::info!("📝 Renaming backup: {} -> {}", old_filename, safe_new_filename);
+
+    let backup_dir = "/data/backups";
+    let old_path = Path::new(backup_dir).join(old_filename);
+    let new_path = Path::new(backup_dir).join(&safe_new_filename);
+
+    if !old_path.exists() {
+        tracing::error!("❌ Old file not found: {:?}", old_path);
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    if new_path.exists() {
+        tracing::error!("❌ New filename already exists: {:?}", new_path);
+        return Err(StatusCode::CONFLICT);
+    }
+
+    fs::rename(&old_path, &new_path)
+        .map_err(|e| {
+            tracing::error!("❌ Rename failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!("✅ Backup renamed successfully");
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "new_filename": safe_new_filename
+    })))
 }
