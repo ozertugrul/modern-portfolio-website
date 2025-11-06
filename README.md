@@ -51,7 +51,7 @@
 - 💾 **Redis** - Session management and data caching
 - 🔐 **Secure Authentication** - Session-based admin authentication
 - 📡 **RESTful API** - Clean and documented endpoints
-- 📧 **Email System** - Integrated Postfix SMTP server (info@ertugrulozer.com.tr)
+- 📧 **Email System** - SMTP integration for contact replies (supports Gmail, Yandex, Zoho)
 
 ### 🛡️ Security & Performance
 - 🔒 **HTTPS Ready** - SSL/TLS configuration
@@ -185,8 +185,14 @@ Optional (for local development):
    - **Admin Panel**: http://localhost:8000/admin
    - **Default Password**: `admin123`
 
-5. **Configure DNS for email (production)**
-   See [DNS_CONFIGURATION.md](DNS_CONFIGURATION.md) and [EMAIL_COMPLETE_SETUP.md](EMAIL_COMPLETE_SETUP.md)
+5. **Configure email (optional)**
+   - For SMTP setup (Gmail, Yandex, Zoho), see [EMAIL_SETUP_TR.md](EMAIL_SETUP_TR.md)
+   - Update `.env` with your SMTP credentials
+   
+6. **Change default password**
+   - Login to admin panel: http://localhost:8000/admin
+   - Password: `admin123`
+   - Go to "Şifre Yönetimi" and change it immediately!
 
 That's it! 🎉
 
@@ -225,15 +231,19 @@ docker run -d -p 6379:6379 redis:7.0-alpine
 Create `.env` file in the root directory:
 
 ```env
-# Backend
+# SMTP Email Configuration (for contact replies)
+SMTP_HOST=smtp.gmail.com          # or smtp.yandex.com, smtp.zoho.com
+SMTP_PORT=587
+SMTP_USER=info@ertugrulozer.com.tr
+SMTP_PASSWORD=your_app_password   # See EMAIL_SETUP_TR.md for details
+
+# Other configs
 RUST_LOG=info
 REDIS_URL=redis://redis:6379
 SESSION_SECRET=your-secret-key-change-this
-ADMIN_PASSWORD_HASH=your-hashed-password
-
-# Frontend
-NEXT_PUBLIC_API_URL=http://localhost:8000/api
 ```
+
+**Important:** See [EMAIL_SETUP_TR.md](EMAIL_SETUP_TR.md) for detailed SMTP setup instructions.
 
 ### Docker Compose Configuration
 
@@ -296,12 +306,18 @@ docker-compose up -d --scale backend1=3
 
 #### 📧 Contact Messages
 - View all messages (newest first)
-- Email-like interface
-- **Reply to messages** via integrated email system
+- Email-like interface with unread indicators
+- **Reply to messages** via SMTP (Gmail, Yandex, Zoho)
+- Compose subject and message
+- Send emails directly to users
 - Mark as read/unread
 - Delete messages
 - Blue highlight for unread messages
-- Send email responses from admin panel
+
+**Email Setup:** See [EMAIL_SETUP_TR.md](EMAIL_SETUP_TR.md) for SMTP configuration with:
+- ✅ Yandex Connect (Free, recommended)
+- ✅ Zoho Mail (Free for 5 users)
+- ✅ Gmail (With app password)
 
 #### 🎨 Hero Section
 - Edit greeting text (TR/EN)
