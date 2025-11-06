@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, ReactElement } from 'react';
 import Image from 'next/image';
 import { useLocale } from '@/contexts/LocaleContext';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
@@ -29,6 +29,7 @@ interface About {
 
 interface Resume {
   id: string;
+  section_order?: string[];
   personal_info: {
     name: string;
     title: string;
@@ -38,6 +39,10 @@ interface Resume {
     github?: string;
     linkedin?: string;
   };
+  summary?: string;
+  summary_enabled?: boolean;
+  skills?: string[];
+  skills_enabled?: boolean;
   education: Array<{
     id: string;
     institution: string;
@@ -47,6 +52,7 @@ interface Resume {
     end_date?: string;
     description?: string;
   }>;
+  education_enabled?: boolean;
   experience: Array<{
     id: string;
     company: string;
@@ -56,6 +62,7 @@ interface Resume {
     description: string;
     technologies: string[];
   }>;
+  experience_enabled?: boolean;
   projects: Array<{
     id: string;
     name: string;
@@ -63,7 +70,23 @@ interface Resume {
     technologies: string[];
     url?: string;
   }>;
+  projects_enabled?: boolean;
   languages: string[];
+  languages_enabled?: boolean;
+  soft_skills?: string[];
+  soft_skills_enabled?: boolean;
+  interests?: string[];
+  interests_enabled?: boolean;
+  references?: Array<{
+    id: string;
+    name: string;
+    title: string;
+    company: string;
+    email?: string;
+    phone?: string;
+    relationship?: string;
+  }>;
+  references_enabled?: boolean;
   certifications: Array<{
     id: string;
     name: string;
@@ -71,6 +94,32 @@ interface Resume {
     date: string;
     url?: string;
   }>;
+  certifications_enabled?: boolean;
+  awards?: Array<{
+    id: string;
+    title: string;
+    issuer: string;
+    date: string;
+    description?: string;
+  }>;
+  awards_enabled?: boolean;
+  publications?: Array<{
+    id: string;
+    title: string;
+    publisher: string;
+    date: string;
+    url?: string;
+  }>;
+  publications_enabled?: boolean;
+  volunteer?: Array<{
+    id: string;
+    organization: string;
+    role: string;
+    start_date: string;
+    end_date?: string;
+    description: string;
+  }>;
+  volunteer_enabled?: boolean;
 }
 
 export default function Home() {
@@ -505,16 +554,16 @@ export default function Home() {
                 <h4 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4 text-zinc-900 dark:text-zinc-100">{t.about.contact}</h4>
                 <div className="space-y-2 text-sm sm:text-base">
                   <p className="text-zinc-600 dark:text-zinc-400 break-all">
-                    📧 <a href={`mailto:${about.email}`} className="hover:text-blue-600 dark:hover:text-blue-400">{about.email}</a>
+                    <a href={`mailto:${about.email}`} className="hover:text-blue-600 dark:hover:text-blue-400">{about.email}</a>
                   </p>
                   {about.github && (
                     <p className="text-zinc-600 dark:text-zinc-400 break-all">
-                      🔗 <a href={about.github} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">{about.github}</a>
+                      <a href={about.github} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">{about.github}</a>
                     </p>
                   )}
                   {about.linkedin && (
                     <p className="text-zinc-600 dark:text-zinc-400 break-all">
-                      🔗 <a href={about.linkedin} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">{about.linkedin}</a>
+                      <a href={about.linkedin} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">{about.linkedin}</a>
                     </p>
                   )}
                 </div>
@@ -528,95 +577,257 @@ export default function Home() {
           <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8 px-4">
             <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-zinc-900 dark:text-zinc-100 mb-6 sm:mb-8">{t.resume.title}</h2>
             <div className="bg-white dark:bg-zinc-800 rounded-xl shadow-sm border border-zinc-200 dark:border-zinc-700 p-4 sm:p-6 md:p-8">
+              {/* Personal Info - Always first */}
               <div className="mb-6 sm:mb-8">
                 <h3 className="text-2xl sm:text-3xl font-bold mb-2 text-zinc-900 dark:text-zinc-100">
                   {resume.personal_info.name}
                 </h3>
                 <p className="text-lg sm:text-xl text-blue-600 dark:text-blue-400 mb-3 sm:mb-4">{resume.personal_info.title}</p>
                 <div className="space-y-2 text-sm sm:text-base text-zinc-600 dark:text-zinc-400">
-                  <p className="break-all">📧 {resume.personal_info.email}</p>
-                  {resume.personal_info.phone && <p>📱 {resume.personal_info.phone}</p>}
-                  {resume.personal_info.location && <p>📍 {resume.personal_info.location}</p>}
+                  <p className="break-all">{resume.personal_info.email}</p>
+                  {resume.personal_info.phone && <p>{resume.personal_info.phone}</p>}
+                  {resume.personal_info.location && <p>{resume.personal_info.location}</p>}
                   {resume.personal_info.github && (
-                    <p className="break-all">🔗 <a href={resume.personal_info.github} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">{resume.personal_info.github}</a></p>
+                    <p className="break-all"><a href={resume.personal_info.github} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">{resume.personal_info.github}</a></p>
                   )}
                   {resume.personal_info.linkedin && (
-                    <p className="break-all">🔗 <a href={resume.personal_info.linkedin} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">{resume.personal_info.linkedin}</a></p>
+                    <p className="break-all"><a href={resume.personal_info.linkedin} target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 dark:hover:text-blue-400">{resume.personal_info.linkedin}</a></p>
                   )}
                 </div>
               </div>
 
-              {resume.experience.length > 0 && (
-                <div className="mb-6 sm:mb-8">
-                  <h4 className="text-xl sm:text-2xl font-semibold mb-3 sm:mb-4 text-zinc-900 dark:text-zinc-100">{t.resume.experience}</h4>
-                  <div className="space-y-4 sm:space-y-6">
-                    {resume.experience.map((exp) => (
-                      <div key={exp.id} className="border-l-2 sm:border-l-4 border-blue-600 pl-3 sm:pl-4">
-                        <h5 className="text-lg sm:text-xl font-semibold text-zinc-900 dark:text-zinc-100">{exp.position}</h5>
-                        <p className="text-sm sm:text-base text-blue-600 dark:text-blue-400">{exp.company}</p>
-                        <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 mb-2">
-                          {exp.start_date} - {exp.end_date || t.resume.ongoing}
-                        </p>
-                        <p className="text-sm sm:text-base text-zinc-700 dark:text-zinc-300 mb-2">{exp.description}</p>
-                        {exp.technologies.length > 0 && (
-                          <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2">
-                            {exp.technologies.map((tech) => (
-                              <span key={tech} className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded">
-                                {tech}
-                              </span>
-                            ))}
+              {/* Render sections in order */}
+              {(() => {
+                const defaultOrder = ['summary', 'skills', 'soft_skills', 'experience', 'education', 
+                  'projects', 'languages', 'interests', 'certifications', 'awards', 'publications', 'volunteer', 'references'];
+                const sectionOrder = (resume.section_order || defaultOrder).filter(id => id !== 'personal');
+                
+                const sections: Record<string, ReactElement | null> = {
+                  summary: resume.summary && resume.summary_enabled !== false ? (
+                    <div className="mb-8" key="summary">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Özet</h4>
+                      <p className="text-zinc-700 dark:text-zinc-300">{resume.summary}</p>
+                    </div>
+                  ) : null,
+                  
+                  skills: resume.skills && resume.skills.length > 0 && resume.skills_enabled !== false ? (
+                    <div className="mb-8" key="skills">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Teknik Yetenekler</h4>
+                      <div className="flex flex-wrap gap-3">
+                        {resume.skills.map((skill) => (
+                          <span key={skill} className="px-4 py-2 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg font-medium">
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                  
+                  soft_skills: resume.soft_skills && resume.soft_skills.length > 0 && resume.soft_skills_enabled !== false ? (
+                    <div className="mb-8" key="soft_skills">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Soft Skills</h4>
+                      <div className="flex flex-wrap gap-3">
+                        {resume.soft_skills.map((skill) => (
+                          <span key={skill} className="px-4 py-2 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 rounded-lg font-medium">
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                  
+                  experience: resume.experience && resume.experience.length > 0 && resume.experience_enabled !== false ? (
+                    <div className="mb-6 sm:mb-8" key="experience">
+                      <h4 className="text-xl sm:text-2xl font-semibold mb-3 sm:mb-4 text-zinc-900 dark:text-zinc-100">{t.resume.experience}</h4>
+                      <div className="space-y-4 sm:space-y-6">
+                        {resume.experience.map((exp) => (
+                          <div key={exp.id} className="border-l-2 sm:border-l-4 border-blue-600 pl-3 sm:pl-4">
+                            <h5 className="text-lg sm:text-xl font-semibold text-zinc-900 dark:text-zinc-100">{exp.position}</h5>
+                            <p className="text-sm sm:text-base text-blue-600 dark:text-blue-400">{exp.company}</p>
+                            <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 mb-2">
+                              {exp.start_date} - {exp.end_date || t.resume.ongoing}
+                            </p>
+                            <p className="text-sm sm:text-base text-zinc-700 dark:text-zinc-300 mb-2">{exp.description}</p>
+                            {exp.technologies.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2">
+                                {exp.technologies.map((tech) => (
+                                  <span key={tech} className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs rounded">
+                                    {tech}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                        )}
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {resume.education.length > 0 && (
-                <div className="mb-8">
-                  <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">E?itim</h4>
-                  <div className="space-y-4">
-                    {resume.education.map((edu) => (
-                      <div key={edu.id} className="border-l-4 border-green-600 pl-4">
-                        <h5 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{edu.degree}</h5>
-                        <p className="text-blue-600 dark:text-blue-400">{edu.institution}</p>
-                        {edu.field && <p className="text-sm text-zinc-600 dark:text-zinc-400">{edu.field}</p>}
-                        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                          {edu.start_date} - {edu.end_date || t.resume.ongoing}
-                        </p>
+                    </div>
+                  ) : null,
+                  
+                  education: resume.education && resume.education.length > 0 && resume.education_enabled !== false ? (
+                    <div className="mb-8" key="education">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Eğitim</h4>
+                      <div className="space-y-4">
+                        {resume.education.map((edu) => (
+                          <div key={edu.id} className="border-l-4 border-green-600 pl-4">
+                            <h5 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{edu.degree}</h5>
+                            <p className="text-blue-600 dark:text-blue-400">{edu.institution}</p>
+                            {edu.field && <p className="text-sm text-zinc-600 dark:text-zinc-400">{edu.field}</p>}
+                            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                              {edu.start_date} - {edu.end_date || t.resume.ongoing}
+                            </p>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {resume.languages.length > 0 && (
-                <div className="mb-8">
-                  <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">{t.resume.languages}</h4>
-                  <div className="flex flex-wrap gap-3">
-                    {resume.languages.map((lang) => (
-                      <span key={lang} className="px-4 py-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-lg font-medium">
-                        {lang}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {resume.certifications.length > 0 && (
-                <div className="mb-8">
-                  <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">{t.resume.certifications}</h4>
-                  <div className="space-y-3">
-                    {resume.certifications.map((cert) => (
-                      <div key={cert.id}>
-                        <h5 className="font-semibold text-zinc-900 dark:text-zinc-100">{cert.name}</h5>
-                        <p className="text-sm text-zinc-600 dark:text-zinc-400">{cert.issuer} - {cert.date}</p>
+                    </div>
+                  ) : null,
+                  
+                  projects: resume.projects && resume.projects.length > 0 && resume.projects_enabled !== false ? (
+                    <div className="mb-8" key="projects">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Projeler</h4>
+                      <div className="space-y-4">
+                        {resume.projects.map((proj) => (
+                          <div key={proj.id} className="border-l-4 border-purple-600 pl-4">
+                            <h5 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{proj.name}</h5>
+                            <p className="text-sm text-zinc-700 dark:text-zinc-300 mb-2">{proj.description}</p>
+                            {proj.technologies && proj.technologies.length > 0 && (
+                              <div className="flex flex-wrap gap-2 mt-2">
+                                {proj.technologies.map((tech) => (
+                                  <span key={tech} className="px-2 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs rounded">
+                                    {tech}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {proj.url && (
+                              <a href={proj.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 dark:text-blue-400 hover:underline mt-2 inline-block">
+                                Projeyi Görüntüle
+                              </a>
+                            )}
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+                    </div>
+                  ) : null,
+                  
+                  languages: resume.languages && resume.languages.length > 0 && resume.languages_enabled !== false ? (
+                    <div className="mb-8" key="languages">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">{t.resume.languages}</h4>
+                      <div className="flex flex-wrap gap-3">
+                        {resume.languages.map((lang) => (
+                          <span key={lang} className="px-4 py-2 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 rounded-lg font-medium">
+                            {lang}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                  
+                  interests: resume.interests && resume.interests.length > 0 && resume.interests_enabled !== false ? (
+                    <div className="mb-8" key="interests">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">İlgi Alanları</h4>
+                      <div className="flex flex-wrap gap-3">
+                        {resume.interests.map((interest) => (
+                          <span key={interest} className="px-4 py-2 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded-lg font-medium">
+                            {interest}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                  
+                  certifications: resume.certifications && resume.certifications.length > 0 && resume.certifications_enabled !== false ? (
+                    <div className="mb-8" key="certifications">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">{t.resume.certifications}</h4>
+                      <div className="space-y-3">
+                        {resume.certifications.map((cert) => (
+                          <div key={cert.id}>
+                            <h5 className="font-semibold text-zinc-900 dark:text-zinc-100">{cert.name}</h5>
+                            <p className="text-sm text-zinc-600 dark:text-zinc-400">{cert.issuer} - {cert.date}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                  
+                  awards: resume.awards && resume.awards.length > 0 && resume.awards_enabled !== false ? (
+                    <div className="mb-8" key="awards">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Ödüller</h4>
+                      <div className="space-y-3">
+                        {resume.awards.map((award) => (
+                          <div key={award.id} className="border-l-4 border-yellow-500 pl-4">
+                            <h5 className="font-semibold text-zinc-900 dark:text-zinc-100">{award.title}</h5>
+                            <p className="text-sm text-zinc-600 dark:text-zinc-400">{award.issuer} - {award.date}</p>
+                            {award.description && <p className="text-sm text-zinc-700 dark:text-zinc-300 mt-1">{award.description}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                  
+                  publications: resume.publications && resume.publications.length > 0 && resume.publications_enabled !== false ? (
+                    <div className="mb-8" key="publications">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Yayınlar</h4>
+                      <div className="space-y-3">
+                        {resume.publications.map((pub) => (
+                          <div key={pub.id}>
+                            <h5 className="font-semibold text-zinc-900 dark:text-zinc-100">{pub.title}</h5>
+                            <p className="text-sm text-zinc-600 dark:text-zinc-400">{pub.publisher} - {pub.date}</p>
+                            {pub.url && (
+                              <a href={pub.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 dark:text-blue-400 hover:underline">
+                                Görüntüle
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                  
+                  volunteer: resume.volunteer && resume.volunteer.length > 0 && resume.volunteer_enabled !== false ? (
+                    <div className="mb-8" key="volunteer">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Gönüllülük</h4>
+                      <div className="space-y-4">
+                        {resume.volunteer.map((vol) => (
+                          <div key={vol.id} className="border-l-4 border-green-600 pl-4">
+                            <h5 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">{vol.role}</h5>
+                            <p className="text-sm text-blue-600 dark:text-blue-400">{vol.organization}</p>
+                            <p className="text-xs text-zinc-600 dark:text-zinc-400">
+                              {vol.start_date} - {vol.end_date || 'Devam ediyor'}
+                            </p>
+                            <p className="text-sm text-zinc-700 dark:text-zinc-300 mt-1">{vol.description}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                  
+                  references: resume.references && resume.references.length > 0 && resume.references_enabled !== false ? (
+                    <div className="mb-8" key="references">
+                      <h4 className="text-2xl font-semibold mb-4 text-zinc-900 dark:text-zinc-100">Referanslar</h4>
+                      <div className="grid md:grid-cols-2 gap-4">
+                        {resume.references.map((ref) => (
+                          <div key={ref.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700">
+                            <h5 className="font-semibold text-zinc-900 dark:text-zinc-100">{ref.name}</h5>
+                            <p className="text-sm text-blue-600 dark:text-blue-400">{ref.title}</p>
+                            <p className="text-sm text-zinc-600 dark:text-zinc-400">{ref.company}</p>
+                            {ref.relationship && (
+                              <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">{ref.relationship}</p>
+                            )}
+                            {ref.email && (
+                              <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-2">{ref.email}</p>
+                            )}
+                            {ref.phone && (
+                              <p className="text-xs text-zinc-600 dark:text-zinc-400">{ref.phone}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null,
+                };
+                
+                return sectionOrder.map(id => sections[id]).filter(Boolean);
+              })()}
             </div>
           </div>
         )}

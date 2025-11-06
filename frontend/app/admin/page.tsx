@@ -30,10 +30,13 @@ interface About {
 interface Resume {
   id: string;
   personal_info: PersonalInfo;
+  section_order?: string[]; // Section sıralaması
   summary?: string;
   summary_enabled: boolean;
   skills: string[];
   skills_enabled: boolean;
+  soft_skills: string[];
+  soft_skills_enabled: boolean;
   education: Education[];
   education_enabled: boolean;
   experience: Experience[];
@@ -50,6 +53,10 @@ interface Resume {
   publications_enabled: boolean;
   volunteer: Volunteer[];
   volunteer_enabled: boolean;
+  interests: string[];
+  interests_enabled: boolean;
+  references: Reference[];
+  references_enabled: boolean;
 }
 
 interface PersonalInfo {
@@ -134,6 +141,16 @@ interface Volunteer {
   start_date: string;
   end_date?: string;
   description: string;
+}
+
+interface Reference {
+  id: string;
+  name: string;
+  title: string;
+  company: string;
+  email?: string;
+  phone?: string;
+  relationship?: string;
 }
 
 interface ContactMessage {
@@ -231,7 +248,59 @@ export default function AdminPanel() {
       const res = await fetch('/api/admin/resume');
       if (res.ok) {
         const data = await res.json();
-        setResume(data);
+        // Ensure all new fields have defaults
+        setResume({
+          ...data,
+          soft_skills: data.soft_skills || [],
+          soft_skills_enabled: data.soft_skills_enabled !== undefined ? data.soft_skills_enabled : true,
+          interests: data.interests || [],
+          interests_enabled: data.interests_enabled !== undefined ? data.interests_enabled : true,
+          references: data.references || [],
+          references_enabled: data.references_enabled !== undefined ? data.references_enabled : false,
+        });
+      } else {
+        // Create default resume if not exists
+        const defaultResume = {
+          id: 'default',
+          personal_info: {
+            name: 'Your Name',
+            title: 'Your Title',
+            email: 'your@email.com',
+            phone: '',
+            location: '',
+            github: '',
+            linkedin: ''
+          },
+          section_order: ['summary', 'skills', 'soft_skills', 'experience', 'education', 
+            'projects', 'languages', 'interests', 'certifications', 'awards', 'publications', 'volunteer', 'references'],
+          summary: '',
+          summary_enabled: false,
+          skills: [],
+          skills_enabled: true,
+          soft_skills: [],
+          soft_skills_enabled: true,
+          education: [],
+          education_enabled: true,
+          experience: [],
+          experience_enabled: true,
+          projects: [],
+          projects_enabled: true,
+          languages: [],
+          languages_enabled: true,
+          certifications: [],
+          certifications_enabled: true,
+          awards: [],
+          awards_enabled: true,
+          publications: [],
+          publications_enabled: true,
+          volunteer: [],
+          volunteer_enabled: true,
+          interests: [],
+          interests_enabled: true,
+          references: [],
+          references_enabled: true
+        };
+        setResume(defaultResume);
       }
     } else if (activeTab === 'contacts') {
       const res = await fetch('/api/admin/contacts');
@@ -406,21 +475,31 @@ export default function AdminPanel() {
   const handleSaveResume = async () => {
     if (!resume) return;
     try {
-      // Clean up languages - remove empty lines before saving
+      // Clean up data before saving - only remove truly empty entries
       const cleanedResume = {
         ...resume,
-        languages: resume.languages.filter(l => l.trim() !== '')
+        languages: resume.languages.filter(l => l && l.trim() !== ''),
+        soft_skills: (resume.soft_skills || []).filter(s => s && s.trim() !== ''),
+        interests: (resume.interests || []).filter(i => i && i.trim() !== ''),
       };
+      
+      console.log('Saving resume:', cleanedResume);
+      
       const res = await fetch('/api/admin/resume', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cleanedResume),
       });
       if (res.ok) {
-        setResume(cleanedResume); // Update state with cleaned data
         alert(t.admin.resume.saveSuccess);
+        // Reload to reflect changes
+        loadData();
+      } else {
+        const error = await res.text();
+        alert('Kayıt hatası: ' + error);
       }
     } catch (error) {
+      console.error('Save error:', error);
       alert(t.admin.resume.saveError);
     }
   };
@@ -1557,58 +1636,864 @@ PostgreSQL"
 
 function ResumeEditor({ resume, onChange }: { resume: Resume; onChange: (resume: Resume) => void }) {
   const { t } = useLocale();
+  const [activeSection, setActiveSection] = useState('personal');
+  
+  // Default section order
+  const defaultOrder = ['summary', 'skills', 'soft_skills', 'experience', 'education', 
+    'projects', 'languages', 'interests', 'certifications', 'awards', 'publications', 'volunteer', 'references'];
+  
+  const sectionOrder = resume.section_order || defaultOrder;
+  
+  const allSections = [
+    { id: 'summary', label: '📝 Özet', enabled: resume.summary_enabled },
+    { id: 'skills', label: '🔧 Teknik Yetenekler', enabled: resume.skills_enabled },
+    { id: 'soft_skills', label: '💡 Soft Skills', enabled: resume.soft_skills_enabled !== false },
+    { id: 'experience', label: '💼 İş Deneyimi', enabled: resume.experience_enabled },
+    { id: 'education', label: '🎓 Eğitim', enabled: resume.education_enabled },
+    { id: 'projects', label: '📂 Projeler', enabled: resume.projects_enabled },
+    { id: 'languages', label: '🌐 Diller', enabled: resume.languages_enabled },
+    { id: 'interests', label: '🎯 İlgi Alanları', enabled: resume.interests_enabled !== false },
+    { id: 'certifications', label: '📜 Sertifikalar', enabled: resume.certifications_enabled },
+    { id: 'awards', label: '🏆 Ödüller', enabled: resume.awards_enabled },
+    { id: 'publications', label: '📚 Yayınlar', enabled: resume.publications_enabled },
+    { id: 'volunteer', label: '🤝 Gönüllülük', enabled: resume.volunteer_enabled },
+    { id: 'references', label: '📞 Referanslar', enabled: resume.references_enabled !== undefined ? resume.references_enabled : false },
+  ];
+  
+  // Sort sections by order
+  const sections = sectionOrder
+    .map(id => allSections.find(s => s.id === id))
+    .filter(Boolean) as typeof allSections;
+  
+  const moveSection = (index: number, direction: 'up' | 'down') => {
+    const newOrder = [...sectionOrder];
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    
+    if (newIndex < 0 || newIndex >= newOrder.length) return;
+    
+    [newOrder[index], newOrder[newIndex]] = [newOrder[newIndex], newOrder[index]];
+    onChange({ ...resume, section_order: newOrder });
+  };
+
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-semibold mb-4 text-zinc-900 dark:text-zinc-100">{t.admin.resume.personalInfo}</h3>
-        <div className="grid md:grid-cols-2 gap-4">
-          <input
-            type="text"
-            placeholder={t.admin.resume.name}
-            value={resume.personal_info.name}
-            onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, name: e.target.value } })}
-            className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
-          />
-          <input
-            type="text"
-            placeholder={t.admin.resume.title}
-            value={resume.personal_info.title}
-            onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, title: e.target.value } })}
-            className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
-          />
-          <input
-            type="email"
-            placeholder={t.admin.resume.email}
-            value={resume.personal_info.email}
-            onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, email: e.target.value } })}
-            className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
-          />
-          <input
-            type="text"
-            placeholder={t.admin.resume.phone}
-            value={resume.personal_info.phone || ''}
-            onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, phone: e.target.value || undefined } })}
-            className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100"
-          />
+      {/* Section Tabs with Reorder Buttons */}
+      <div className="space-y-2">
+        <p className="text-sm text-zinc-600 dark:text-zinc-400">Bölümlerin sırasını değiştirmek için ↑ ↓ butonlarını kullanın</p>
+        <div className="flex flex-wrap gap-2 border-b border-zinc-300 dark:border-zinc-700 pb-4">
+          {sections.map((section, index) => (
+            <div key={section.id} className="flex items-center gap-1">
+              {/* Up/Down buttons */}
+              <div className="flex flex-col gap-0.5">
+                <button
+                  onClick={() => moveSection(index, 'up')}
+                  disabled={index === 0}
+                  className="px-1 py-0.5 text-xs bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 rounded hover:bg-zinc-300 dark:hover:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Yukarı taşı"
+                >
+                  ↑
+                </button>
+                <button
+                  onClick={() => moveSection(index, 'down')}
+                  disabled={index === sections.length - 1}
+                  className="px-1 py-0.5 text-xs bg-zinc-200 dark:bg-zinc-700 text-zinc-700 dark:text-zinc-300 rounded hover:bg-zinc-300 dark:hover:bg-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                  title="Aşağı taşı"
+                >
+                  ↓
+                </button>
+              </div>
+              
+              {/* Section button */}
+              <button
+                onClick={() => setActiveSection(section.id)}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeSection === section.id
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                }`}
+              >
+                {section.label}
+                {section.id !== 'personal' && (
+                  <span className={`ml-2 text-xs ${section.enabled ? '✓' : '✗'}`}>
+                    {section.enabled ? '✓' : '✗'}
+                  </span>
+                )}
+              </button>
+            </div>
+          ))}
         </div>
       </div>
-      
-      <div>
-        <h3 className="text-lg font-semibold mb-4 text-zinc-900 dark:text-zinc-100">{t.resume.languages}</h3>
-        <textarea
-          placeholder="Turkish
-English
-German"
-          value={resume.languages.join('\n')}
-          onChange={(e) => {
-            const langs = e.target.value.split('\n').map(s => s.trim());
-            onChange({ ...resume, languages: langs });
-          }}
-          rows={3}
-          className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-mono"
-        />
-        <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">Her satıra bir dil yazın (Enter ile yeni satır)</p>
-      </div>
+
+      {/* Personal Info */}
+      {activeSection === 'personal' && (
+        <div className="space-y-4">
+          <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">👤 Kişisel Bilgiler</h3>
+          <div className="grid md:grid-cols-2 gap-4">
+            <input
+              type="text"
+              placeholder="Ad Soyad"
+              value={resume.personal_info.name}
+              onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, name: e.target.value } })}
+              className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+            />
+            <input
+              type="text"
+              placeholder="Ünvan (örn: Senior Developer)"
+              value={resume.personal_info.title}
+              onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, title: e.target.value } })}
+              className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+            />
+            <input
+              type="email"
+              placeholder="Email"
+              value={resume.personal_info.email}
+              onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, email: e.target.value } })}
+              className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+            />
+            <input
+              type="text"
+              placeholder="Telefon"
+              value={resume.personal_info.phone || ''}
+              onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, phone: e.target.value } })}
+              className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+            />
+            <input
+              type="text"
+              placeholder="Konum (örn: Istanbul, Turkey)"
+              value={resume.personal_info.location || ''}
+              onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, location: e.target.value } })}
+              className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+            />
+            <input
+              type="url"
+              placeholder="Website"
+              value={resume.personal_info.website || ''}
+              onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, website: e.target.value } })}
+              className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+            />
+            <input
+              type="url"
+              placeholder="GitHub URL"
+              value={resume.personal_info.github || ''}
+              onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, github: e.target.value } })}
+              className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+            />
+            <input
+              type="url"
+              placeholder="LinkedIn URL"
+              value={resume.personal_info.linkedin || ''}
+              onChange={(e) => onChange({ ...resume, personal_info: { ...resume.personal_info, linkedin: e.target.value } })}
+              className="px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Summary */}
+      {activeSection === 'summary' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">📝 Özet / Summary</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.summary_enabled}
+                onChange={(e) => onChange({ ...resume, summary_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          <textarea
+            placeholder="Profesyonel özet yazın (2-3 cümle)..."
+            value={resume.summary || ''}
+            onChange={(e) => onChange({ ...resume, summary: e.target.value })}
+            rows={4}
+            className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+          />
+        </div>
+      )}
+
+      {/* Skills */}
+      {activeSection === 'skills' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">🔧 Teknik Yetenekler</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.skills_enabled}
+                onChange={(e) => onChange({ ...resume, skills_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          <textarea
+            placeholder="React
+Node.js
+TypeScript
+Docker"
+            value={resume.skills.join('\n')}
+            onChange={(e) => onChange({ ...resume, skills: e.target.value.split('\n').filter(s => s.trim()) })}
+            rows={6}
+            className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 font-mono"
+          />
+          <p className="text-xs text-zinc-500">Her satıra bir yetenek</p>
+        </div>
+      )}
+
+      {/* Soft Skills */}
+      {activeSection === 'soft_skills' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">💡 Soft Skills</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.soft_skills_enabled !== false}
+                onChange={(e) => onChange({ ...resume, soft_skills_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          <textarea
+            placeholder="Leadership
+Communication
+Problem Solving
+Teamwork"
+            value={(resume.soft_skills || []).join('\n')}
+            onChange={(e) => onChange({ ...resume, soft_skills: e.target.value.split('\n') })}
+            rows={6}
+            className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 font-mono"
+          />
+          <p className="text-xs text-zinc-500">Her satıra bir soft skill</p>
+        </div>
+      )}
+
+      {/* Languages */}
+      {activeSection === 'languages' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">🌐 Diller</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.languages_enabled}
+                onChange={(e) => onChange({ ...resume, languages_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          <textarea
+            placeholder="Turkish (Native)
+English (Fluent)
+German (Intermediate)"
+            value={resume.languages.join('\n')}
+            onChange={(e) => onChange({ ...resume, languages: e.target.value.split('\n') })}
+            rows={4}
+            className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 font-mono"
+          />
+          <p className="text-xs text-zinc-500">Her satıra bir dil</p>
+        </div>
+      )}
+
+      {/* Interests */}
+      {activeSection === 'interests' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">🎯 İlgi Alanları</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.interests_enabled !== false}
+                onChange={(e) => onChange({ ...resume, interests_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          <textarea
+            placeholder="Open Source Contribution
+Tech Blogging
+Photography
+Hiking"
+            value={(resume.interests || []).join('\n')}
+            onChange={(e) => onChange({ ...resume, interests: e.target.value.split('\n') })}
+            rows={4}
+            className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 font-mono"
+          />
+          <p className="text-xs text-zinc-500">Her satıra bir ilgi alanı</p>
+        </div>
+      )}
+
+      {/* References - Basic for now */}
+      {activeSection === 'references' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">📞 Referanslar</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.references_enabled === true}
+                onChange={(e) => onChange({ ...resume, references_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          
+          <button
+            onClick={() => onChange({ ...resume, references: [...(resume.references || []), {
+              id: Date.now().toString(), name: '', title: '', company: '',
+              email: '', phone: '', relationship: ''
+            }]})}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + Yeni Referans Ekle
+          </button>
+
+          {(resume.references || []).map((ref, idx) => (
+            <div key={ref.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border space-y-3">
+              <div className="grid md:grid-cols-2 gap-3">
+                <input placeholder="Ad Soyad" value={ref.name} onChange={(e) => {
+                  const u = [...(resume.references || [])]; u[idx] = {...u[idx], name: e.target.value}; onChange({...resume, references: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="Ünvan" value={ref.title} onChange={(e) => {
+                  const u = [...(resume.references || [])]; u[idx] = {...u[idx], title: e.target.value}; onChange({...resume, references: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="Şirket" value={ref.company} onChange={(e) => {
+                  const u = [...(resume.references || [])]; u[idx] = {...u[idx], company: e.target.value}; onChange({...resume, references: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="İlişki (örn: Eski Müdür)" value={ref.relationship || ''} onChange={(e) => {
+                  const u = [...(resume.references || [])]; u[idx] = {...u[idx], relationship: e.target.value}; onChange({...resume, references: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input type="email" placeholder="Email" value={ref.email || ''} onChange={(e) => {
+                  const u = [...(resume.references || [])]; u[idx] = {...u[idx], email: e.target.value}; onChange({...resume, references: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input type="tel" placeholder="Telefon" value={ref.phone || ''} onChange={(e) => {
+                  const u = [...(resume.references || [])]; u[idx] = {...u[idx], phone: e.target.value}; onChange({...resume, references: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+              </div>
+              <button onClick={() => onChange({...resume, references: (resume.references || []).filter((_, i) => i !== idx)})}
+                className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700">🗑️ Sil</button>
+            </div>
+          ))}
+          {(resume.references || []).length === 0 && <p className="text-center text-zinc-500 py-4">Henüz referans eklenmedi</p>}
+        </div>
+      )}
+
+      {/* Experience */}
+      {activeSection === 'experience' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">💼 İş Deneyimi</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.experience_enabled}
+                onChange={(e) => onChange({ ...resume, experience_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          
+          <button
+            onClick={() => onChange({ ...resume, experience: [...resume.experience, {
+              id: Date.now().toString(), company: '', position: '', location: '',
+              start_date: new Date().toISOString().split('T')[0], end_date: '', current: false,
+              description: '', achievements: [], technologies: []
+            }]})}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + Yeni Deneyim Ekle
+          </button>
+
+          {resume.experience.map((exp, idx) => (
+            <div key={exp.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border space-y-3">
+              <div className="grid md:grid-cols-2 gap-3">
+                <input placeholder="Şirket" value={exp.company} onChange={(e) => {
+                  const u = [...resume.experience]; u[idx] = {...u[idx], company: e.target.value}; onChange({...resume, experience: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="Pozisyon" value={exp.position} onChange={(e) => {
+                  const u = [...resume.experience]; u[idx] = {...u[idx], position: e.target.value}; onChange({...resume, experience: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input type="date" value={exp.start_date} onChange={(e) => {
+                  const u = [...resume.experience]; u[idx] = {...u[idx], start_date: e.target.value}; onChange({...resume, experience: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input type="date" value={exp.end_date || ''} onChange={(e) => {
+                  const u = [...resume.experience]; u[idx] = {...u[idx], end_date: e.target.value}; onChange({...resume, experience: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+              </div>
+              <textarea placeholder="Açıklama" value={exp.description} rows={3} onChange={(e) => {
+                const u = [...resume.experience]; u[idx] = {...u[idx], description: e.target.value}; onChange({...resume, experience: u});
+              }} className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+              <textarea placeholder="Teknolojiler (her satırda bir tane)" value={exp.technologies.join('\n')} rows={2} onChange={(e) => {
+                const u = [...resume.experience]; u[idx] = {...u[idx], technologies: e.target.value.split('\n').filter(t => t.trim())}; onChange({...resume, experience: u});
+              }} className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900 font-mono" />
+              <button onClick={() => onChange({...resume, experience: resume.experience.filter((_, i) => i !== idx)})}
+                className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700">🗑️ Sil</button>
+            </div>
+          ))}
+          {resume.experience.length === 0 && <p className="text-center text-zinc-500 py-4">Henüz deneyim eklenmedi</p>}
+        </div>
+      )}
+
+      {/* Education */}
+      {activeSection === 'education' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">🎓 Eğitim</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.education_enabled}
+                onChange={(e) => onChange({ ...resume, education_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          
+          <button
+            onClick={() => onChange({ ...resume, education: [...resume.education, {
+              id: Date.now().toString(), institution: '', degree: '', field: '',
+              start_date: new Date().toISOString().split('T')[0], end_date: '', gpa: '', description: ''
+            }]})}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + Yeni Eğitim Ekle
+          </button>
+
+          {resume.education.map((edu, idx) => (
+            <div key={edu.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border space-y-3">
+              <div className="grid md:grid-cols-2 gap-3">
+                <input placeholder="Kurum" value={edu.institution} onChange={(e) => {
+                  const u = [...resume.education]; u[idx] = {...u[idx], institution: e.target.value}; onChange({...resume, education: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="Derece (Lisans, Yüksek Lisans...)" value={edu.degree} onChange={(e) => {
+                  const u = [...resume.education]; u[idx] = {...u[idx], degree: e.target.value}; onChange({...resume, education: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="Alan/Bölüm" value={edu.field || ''} onChange={(e) => {
+                  const u = [...resume.education]; u[idx] = {...u[idx], field: e.target.value}; onChange({...resume, education: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="GPA (opsiyonel)" value={edu.gpa || ''} onChange={(e) => {
+                  const u = [...resume.education]; u[idx] = {...u[idx], gpa: e.target.value}; onChange({...resume, education: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input type="date" value={edu.start_date} onChange={(e) => {
+                  const u = [...resume.education]; u[idx] = {...u[idx], start_date: e.target.value}; onChange({...resume, education: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input type="date" value={edu.end_date || ''} onChange={(e) => {
+                  const u = [...resume.education]; u[idx] = {...u[idx], end_date: e.target.value}; onChange({...resume, education: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+              </div>
+              <button onClick={() => onChange({...resume, education: resume.education.filter((_, i) => i !== idx)})}
+                className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700">🗑️ Sil</button>
+            </div>
+          ))}
+          {resume.education.length === 0 && <p className="text-center text-zinc-500 py-4">Henüz eğitim eklenmedi</p>}
+        </div>
+      )}
+
+      {/* Projects */}
+      {activeSection === 'projects' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">📂 Projeler</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.projects_enabled}
+                onChange={(e) => onChange({ ...resume, projects_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          
+          <button
+            onClick={() => onChange({ ...resume, projects: [...resume.projects, {
+              id: Date.now().toString(), name: '', description: '', role: '',
+              start_date: '', end_date: '', technologies: [], url: ''
+            }]})}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + Yeni Proje Ekle
+          </button>
+
+          {resume.projects.map((proj, idx) => (
+            <div key={proj.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border space-y-3">
+              <div className="grid md:grid-cols-2 gap-3">
+                <input placeholder="Proje Adı" value={proj.name} onChange={(e) => {
+                  const u = [...resume.projects]; u[idx] = {...u[idx], name: e.target.value}; onChange({...resume, projects: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="URL" value={proj.url || ''} onChange={(e) => {
+                  const u = [...resume.projects]; u[idx] = {...u[idx], url: e.target.value}; onChange({...resume, projects: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+              </div>
+              <textarea placeholder="Açıklama" value={proj.description} rows={2} onChange={(e) => {
+                const u = [...resume.projects]; u[idx] = {...u[idx], description: e.target.value}; onChange({...resume, projects: u});
+              }} className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+              <textarea placeholder="Teknolojiler (her satırda bir tane)" value={proj.technologies.join('\n')} rows={2} onChange={(e) => {
+                const u = [...resume.projects]; u[idx] = {...u[idx], technologies: e.target.value.split('\n').filter(t => t.trim())}; onChange({...resume, projects: u});
+              }} className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900 font-mono" />
+              <button onClick={() => onChange({...resume, projects: resume.projects.filter((_, i) => i !== idx)})}
+                className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700">🗑️ Sil</button>
+            </div>
+          ))}
+          {resume.projects.length === 0 && <p className="text-center text-zinc-500 py-4">Henüz proje eklenmedi</p>}
+        </div>
+      )}
+
+      {/* Certifications */}
+      {activeSection === 'certifications' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">📜 Sertifikalar</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.certifications_enabled}
+                onChange={(e) => onChange({ ...resume, certifications_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          
+          <button
+            onClick={() => {
+              const newCert = {
+                id: Date.now().toString(),
+                name: '',
+                issuer: '',
+                date: new Date().toISOString().split('T')[0],
+                url: ''
+              };
+              onChange({ ...resume, certifications: [...resume.certifications, newCert] });
+            }}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + Yeni Sertifika Ekle
+          </button>
+
+          <div className="space-y-4">
+            {resume.certifications.map((cert, idx) => (
+              <div key={cert.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700">
+                <div className="grid md:grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    placeholder="Sertifika Adı"
+                    value={cert.name}
+                    onChange={(e) => {
+                      const updated = [...resume.certifications];
+                      updated[idx] = { ...updated[idx], name: e.target.value };
+                      onChange({ ...resume, certifications: updated });
+                    }}
+                    className="px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Veren Kurum"
+                    value={cert.issuer}
+                    onChange={(e) => {
+                      const updated = [...resume.certifications];
+                      updated[idx] = { ...updated[idx], issuer: e.target.value };
+                      onChange({ ...resume, certifications: updated });
+                    }}
+                    className="px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                  <input
+                    type="date"
+                    value={cert.date}
+                    onChange={(e) => {
+                      const updated = [...resume.certifications];
+                      updated[idx] = { ...updated[idx], date: e.target.value };
+                      onChange({ ...resume, certifications: updated });
+                    }}
+                    className="px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                  <input
+                    type="url"
+                    placeholder="URL (opsiyonel)"
+                    value={cert.url || ''}
+                    onChange={(e) => {
+                      const updated = [...resume.certifications];
+                      updated[idx] = { ...updated[idx], url: e.target.value };
+                      onChange({ ...resume, certifications: updated });
+                    }}
+                    className="px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    const updated = resume.certifications.filter((_, i) => i !== idx);
+                    onChange({ ...resume, certifications: updated });
+                  }}
+                  className="mt-2 px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                >
+                  🗑️ Sil
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {resume.certifications.length === 0 && (
+            <p className="text-sm text-zinc-500 text-center py-4">Henüz sertifika eklenmedi</p>
+          )}
+        </div>
+      )}
+
+      {/* Awards */}
+      {activeSection === 'awards' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">🏆 Ödüller</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.awards_enabled}
+                onChange={(e) => onChange({ ...resume, awards_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          
+          <button
+            onClick={() => {
+              const newAward = {
+                id: Date.now().toString(),
+                title: '',
+                issuer: '',
+                date: new Date().toISOString().split('T')[0],
+                description: ''
+              };
+              onChange({ ...resume, awards: [...resume.awards, newAward] });
+            }}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + Yeni Ödül Ekle
+          </button>
+
+          <div className="space-y-4">
+            {resume.awards.map((award, idx) => (
+              <div key={award.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-700">
+                <div className="grid md:grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    placeholder="Ödül Adı"
+                    value={award.title}
+                    onChange={(e) => {
+                      const updated = [...resume.awards];
+                      updated[idx] = { ...updated[idx], title: e.target.value };
+                      onChange({ ...resume, awards: updated });
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Veren Kurum"
+                    value={award.issuer}
+                    onChange={(e) => {
+                      const updated = [...resume.awards];
+                      updated[idx] = { ...updated[idx], issuer: e.target.value };
+                      onChange({ ...resume, awards: updated });
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                  <input
+                    type="date"
+                    value={award.date}
+                    onChange={(e) => {
+                      const updated = [...resume.awards];
+                      updated[idx] = { ...updated[idx], date: e.target.value };
+                      onChange({ ...resume, awards: updated });
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                </div>
+                <textarea
+                  placeholder="Açıklama (opsiyonel)"
+                  value={award.description || ''}
+                  onChange={(e) => {
+                    const updated = [...resume.awards];
+                    updated[idx] = { ...updated[idx], description: e.target.value };
+                    onChange({ ...resume, awards: updated });
+                  }}
+                  rows={2}
+                  className="w-full mt-3 px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900"
+                />
+                <button
+                  onClick={() => {
+                    const updated = resume.awards.filter((_, i) => i !== idx);
+                    onChange({ ...resume, awards: updated });
+                  }}
+                  className="mt-2 px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                >
+                  🗑️ Sil
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {resume.awards.length === 0 && (
+            <p className="text-sm text-zinc-500 text-center py-4">Henüz ödül eklenmedi</p>
+          )}
+        </div>
+      )}
+
+      {/* Publications */}
+      {activeSection === 'publications' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">📚 Yayınlar</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.publications_enabled}
+                onChange={(e) => onChange({ ...resume, publications_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          
+          <button
+            onClick={() => {
+              const newPub = {
+                id: Date.now().toString(),
+                title: '',
+                publisher: '',
+                date: new Date().toISOString().split('T')[0],
+                authors: [],
+                url: '',
+                description: ''
+              };
+              onChange({ ...resume, publications: [...resume.publications, newPub] });
+            }}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + Yeni Yayın Ekle
+          </button>
+
+          <div className="space-y-4">
+            {resume.publications.map((pub, idx) => (
+              <div key={pub.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border">
+                <div className="grid md:grid-cols-2 gap-3">
+                  <input
+                    type="text"
+                    placeholder="Yayın Başlığı"
+                    value={pub.title}
+                    onChange={(e) => {
+                      const updated = [...resume.publications];
+                      updated[idx] = { ...updated[idx], title: e.target.value };
+                      onChange({ ...resume, publications: updated });
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Yayıncı/Dergi"
+                    value={pub.publisher}
+                    onChange={(e) => {
+                      const updated = [...resume.publications];
+                      updated[idx] = { ...updated[idx], publisher: e.target.value };
+                      onChange({ ...resume, publications: updated });
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                  <input
+                    type="date"
+                    value={pub.date}
+                    onChange={(e) => {
+                      const updated = [...resume.publications];
+                      updated[idx] = { ...updated[idx], date: e.target.value };
+                      onChange({ ...resume, publications: updated });
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                  <input
+                    type="url"
+                    placeholder="URL"
+                    value={pub.url || ''}
+                    onChange={(e) => {
+                      const updated = [...resume.publications];
+                      updated[idx] = { ...updated[idx], url: e.target.value };
+                      onChange({ ...resume, publications: updated });
+                    }}
+                    className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900"
+                  />
+                </div>
+                <button
+                  onClick={() => onChange({ ...resume, publications: resume.publications.filter((_, i) => i !== idx) })}
+                  className="mt-2 px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700"
+                >
+                  🗑️ Sil
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {resume.publications.length === 0 && <p className="text-center text-zinc-500 py-4">Henüz yayın eklenmedi</p>}
+        </div>
+      )}
+
+      {/* Volunteer */}
+      {activeSection === 'volunteer' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">🤝 Gönüllülük</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={resume.volunteer_enabled}
+                onChange={(e) => onChange({ ...resume, volunteer_enabled: e.target.checked })}
+                className="w-5 h-5"
+              />
+              <span className="text-sm">Göster</span>
+            </label>
+          </div>
+          
+          <button
+            onClick={() => onChange({ ...resume, volunteer: [...resume.volunteer, {
+              id: Date.now().toString(), organization: '', role: '',
+              start_date: new Date().toISOString().split('T')[0], end_date: '', description: ''
+            }]})}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            + Yeni Gönüllülük Ekle
+          </button>
+
+          {resume.volunteer.map((vol, idx) => (
+            <div key={vol.id} className="p-4 bg-zinc-50 dark:bg-zinc-900 rounded-lg border space-y-3">
+              <div className="grid md:grid-cols-2 gap-3">
+                <input placeholder="Kurum" value={vol.organization} onChange={(e) => {
+                  const u = [...resume.volunteer]; u[idx] = {...u[idx], organization: e.target.value}; onChange({...resume, volunteer: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input placeholder="Rol" value={vol.role} onChange={(e) => {
+                  const u = [...resume.volunteer]; u[idx] = {...u[idx], role: e.target.value}; onChange({...resume, volunteer: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input type="date" value={vol.start_date} onChange={(e) => {
+                  const u = [...resume.volunteer]; u[idx] = {...u[idx], start_date: e.target.value}; onChange({...resume, volunteer: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+                <input type="date" placeholder="Bitiş" value={vol.end_date || ''} onChange={(e) => {
+                  const u = [...resume.volunteer]; u[idx] = {...u[idx], end_date: e.target.value}; onChange({...resume, volunteer: u});
+                }} className="px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+              </div>
+              <textarea placeholder="Açıklama" value={vol.description} rows={2} onChange={(e) => {
+                const u = [...resume.volunteer]; u[idx] = {...u[idx], description: e.target.value}; onChange({...resume, volunteer: u});
+              }} className="w-full px-3 py-2 border rounded-lg bg-white dark:bg-zinc-900" />
+              <button onClick={() => onChange({...resume, volunteer: resume.volunteer.filter((_, i) => i !== idx)})}
+                className="px-3 py-1 bg-red-600 text-white text-sm rounded hover:bg-red-700">🗑️ Sil</button>
+            </div>
+          ))}
+          {resume.volunteer.length === 0 && <p className="text-center text-zinc-500 py-4">Henüz gönüllülük eklenmedi</p>}
+        </div>
+      )}
     </div>
   );
 }

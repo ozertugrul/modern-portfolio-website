@@ -45,10 +45,13 @@ struct About {
 struct Resume {
     id: String,
     personal_info: PersonalInfo,
+    section_order: Option<Vec<String>>,
     summary: Option<String>,
     summary_enabled: bool,
     skills: Vec<String>,
     skills_enabled: bool,
+    soft_skills: Vec<String>,
+    soft_skills_enabled: bool,
     education: Vec<Education>,
     education_enabled: bool,
     experience: Vec<Experience>,
@@ -65,6 +68,10 @@ struct Resume {
     publications_enabled: bool,
     volunteer: Vec<Volunteer>,
     volunteer_enabled: bool,
+    interests: Vec<String>,
+    interests_enabled: bool,
+    references: Vec<Reference>,
+    references_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -157,6 +164,17 @@ struct Volunteer {
     start_date: String,
     end_date: Option<String>,
     description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct Reference {
+    id: String,
+    name: String,
+    title: String,
+    company: String,
+    email: Option<String>,
+    phone: Option<String>,
+    relationship: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -396,10 +414,13 @@ async fn get_resume(Extension(state): Extension<AppState>) -> Result<Json<Resume
                 linkedin: Some("https://linkedin.com/in/ertu".to_string()),
                 twitter: None,
             },
+            section_order: None,
             summary: Some("Experienced backend developer specializing in Rust and high-performance systems.".to_string()),
             summary_enabled: true,
             skills: vec!["Rust".to_string(), "Docker".to_string(), "PostgreSQL".to_string()],
             skills_enabled: true,
+            soft_skills: vec!["Leadership".to_string(), "Problem Solving".to_string(), "Communication".to_string()],
+            soft_skills_enabled: true,
             education: vec![],
             education_enabled: true,
             experience: vec![],
@@ -416,6 +437,10 @@ async fn get_resume(Extension(state): Extension<AppState>) -> Result<Json<Resume
             publications_enabled: false,
             volunteer: vec![],
             volunteer_enabled: false,
+            interests: vec!["Open Source".to_string(), "Tech Blogging".to_string()],
+            interests_enabled: true,
+            references: vec![],
+            references_enabled: false,
         };
         Ok(Json(default_resume))
     }
