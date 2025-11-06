@@ -1078,7 +1078,7 @@ async fn admin_reply_contact(
     let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "mailserver".to_string());
     let smtp_port = env::var("SMTP_PORT").unwrap_or_else(|_| "587".to_string())
         .parse::<u16>().unwrap_or(587);
-    let smtp_user = env::var("SMTP_USER").unwrap_or_else(|_| "info@ozertugrul.com.tr".to_string());
+    let smtp_user = env::var("SMTP_USER").unwrap_or_else(|_| "info@ertugrulozer.com.tr".to_string());
     let smtp_pass = env::var("SMTP_PASSWORD").unwrap_or_default();
     
     // Build email

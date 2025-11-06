@@ -44,7 +44,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - SMTP_HOST=${SMTP_HOST:-mailserver}
       - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-info@ozertugrul.com.tr}
+      - SMTP_USER=${SMTP_USER:-info@ertugrulozer.com.tr}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
     expose:
       - "8080"
@@ -71,7 +71,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - SMTP_HOST=${SMTP_HOST:-mailserver}
       - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-info@ozertugrul.com.tr}
+      - SMTP_USER=${SMTP_USER:-info@ertugrulozer.com.tr}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-}
     expose:
       - "8080"
@@ -112,14 +112,14 @@ services:
   mailserver:
     image: boky/postfix:latest
     environment:
-      - ALLOWED_SENDER_DOMAINS=ozertugrul.com.tr
+      - ALLOWED_SENDER_DOMAINS=ertugrulozer.com.tr
       - ALLOW_EMPTY_SENDER_DOMAINS=true
     ports:
       - "25:587"
     restart: unless-stopped
     networks:
       - portfolio-network
-    hostname: mail.ozertugrul.com.tr
+    hostname: mail.ertugrulozer.com.tr
 
 networks:
   portfolio-network:

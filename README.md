@@ -51,6 +51,7 @@
 - 💾 **Redis** - Session management and data caching
 - 🔐 **Secure Authentication** - Session-based admin authentication
 - 📡 **RESTful API** - Clean and documented endpoints
+- 📧 **Email System** - Integrated Postfix SMTP server (info@ertugrulozer.com.tr)
 
 ### 🛡️ Security & Performance
 - 🔒 **HTTPS Ready** - SSL/TLS configuration
@@ -62,7 +63,7 @@
 ### 🎛️ Admin Panel
 - 📝 **Content Management** - Edit all content dynamically
 - 🖼️ **Portfolio Management** - Add/Edit/Delete projects with hover effects
-- 📧 **Contact Messages** - View and manage messages (email-like UI)
+- 📧 **Contact Messages** - View and reply to messages via email
 - 👤 **Profile Management** - Update bio, skills, resume
 - 🎨 **Hero Section Editor** - Customize homepage hero
 - 🌐 **Translation Management** - Complete i18n editor with search & tree view
@@ -70,6 +71,7 @@
 - 💾 **Backup System** - Redis backup/restore with rename capability
 - 📊 **Logs Dashboard** - Monitor site traffic and user activity
 - 🔐 **Password Management** - Change admin password
+- ✉️ **Email Replies** - Reply to contact messages directly from admin panel
 
 ---
 
@@ -98,6 +100,7 @@
 | **Docker** | 24+ | Containerization |
 | **Docker Compose** | 2.0+ | Multi-container orchestration |
 | **Nginx** | 1.29.3 | Load balancer & reverse proxy |
+| **Postfix** | Latest | SMTP mail server |
 
 ---
 
@@ -124,6 +127,12 @@
                               ┌─────▼───▼─────┐
                               │     Redis     │
                               │   Port 6379   │
+                              └───────────────┘
+                                    │
+                              ┌─────▼─────────┐
+                              │  Mail Server  │
+                              │   (Postfix)   │
+                              │   Port 587    │
                               └───────────────┘
 ```
 
@@ -159,15 +168,25 @@ Optional (for local development):
    cd modern-portfolio-website
    ```
 
-2. **Start all services**
+2. **Configure environment (optional)**
+   ```bash
+   # Edit .env file if needed
+   # Default email: info@ertugrulozer.com.tr
+   nano .env
+   ```
+
+3. **Start all services**
    ```bash
    docker-compose up -d
    ```
 
-3. **Access the application**
+4. **Access the application**
    - **Website**: http://localhost:8000
    - **Admin Panel**: http://localhost:8000/admin
    - **Default Password**: `admin123`
+
+5. **Configure DNS for email (production)**
+   See [DNS_CONFIGURATION.md](DNS_CONFIGURATION.md) and [EMAIL_COMPLETE_SETUP.md](EMAIL_COMPLETE_SETUP.md)
 
 That's it! 🎉
 
@@ -278,9 +297,11 @@ docker-compose up -d --scale backend1=3
 #### 📧 Contact Messages
 - View all messages (newest first)
 - Email-like interface
+- **Reply to messages** via integrated email system
 - Mark as read/unread
 - Delete messages
 - Blue highlight for unread messages
+- Send email responses from admin panel
 
 #### 🎨 Hero Section
 - Edit greeting text (TR/EN)
@@ -350,8 +371,10 @@ PUT    /api/admin/about                    # Update about section
 GET    /api/admin/resume                   # Get resume
 PUT    /api/admin/resume                   # Update resume
 
+```http
 GET    /api/admin/contacts                 # Get contact messages
 PUT    /api/admin/contacts/read?id=<id>    # Mark as read
+POST   /api/admin/contacts/reply           # Reply to contact via email
 DELETE /api/admin/contacts/delete?id=<id>  # Delete message
 
 GET    /api/admin/features                 # Get features
@@ -589,9 +612,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Contact
 
-**Ertuğrul** - Rust Backend Developer
+**Ertuğrul Özer** - Rust Backend Developer
 
-- Website: [Live Demo](https://culture-angels-low-combined.trycloudflare.com/)
+- Website: [https://culture-angels-low-combined.trycloudflare.com/](https://culture-angels-low-combined.trycloudflare.com/)
 - GitHub: [@ozertugrul](https://github.com/ozertugrul)
 - Email: muhammedozer32@gmail.com
 
