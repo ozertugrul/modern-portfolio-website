@@ -61,11 +61,14 @@
 
 ### 🎛️ Admin Panel
 - 📝 **Content Management** - Edit all content dynamically
-- 🖼️ **Portfolio Management** - Add/Edit/Delete projects
+- 🖼️ **Portfolio Management** - Add/Edit/Delete projects with hover effects
 - 📧 **Contact Messages** - View and manage messages (email-like UI)
 - 👤 **Profile Management** - Update bio, skills, resume
 - 🎨 **Hero Section Editor** - Customize homepage hero
-- 🌐 **i18n Management** - Edit translations for both languages
+- 🌐 **Translation Management** - Complete i18n editor with search & tree view
+- 📄 **Resume Editor** - Professional CV sections with drag-to-reorder
+- 💾 **Backup System** - Redis backup/restore with rename capability
+- 📊 **Logs Dashboard** - Monitor site traffic and user activity
 - 🔐 **Password Management** - Change admin password
 
 ---
@@ -239,11 +242,13 @@ docker-compose up -d --scale backend1=3
 ### Admin Panel Features
 
 #### 📝 Portfolio Management
-- Add new projects
-- Edit existing projects
+- Add new projects with modern card design
+- Smooth hover animations and expand effects
 - Upload images (external URLs)
-- Set GitHub/Live demo links
-- Tag technologies (multi-line input)
+- GitHub, Live Demo, and HuggingFace links
+- Tag technologies (comma-separated)
+- Drag to reorder portfolio items
+- Click cards to expand and view full details
 
 #### 👤 About Section
 - Update bio
@@ -252,11 +257,23 @@ docker-compose up -d --scale backend1=3
 - Update contact email
 
 #### 📄 Resume Management
-- Personal information
-- Work experience
-- Education
-- Languages (one per line)
-- Certifications
+- **Complete Professional CV Editor**:
+  - Personal Information
+  - Summary
+  - Technical Skills & Soft Skills
+  - Work Experience
+  - Education
+  - Projects
+  - Languages
+  - Interests
+  - Certifications
+  - Awards & Publications
+  - Volunteer Work
+  - References
+- **Drag-to-Reorder**: Change section order with ↑↓ buttons
+- **Enable/Disable**: Show/hide sections with checkboxes
+- **Dynamic Forms**: Add multiple entries for each section
+- **Real-time Preview**: Changes reflect immediately
 
 #### 📧 Contact Messages
 - View all messages (newest first)
@@ -270,6 +287,32 @@ docker-compose up -d --scale backend1=3
 - Update name
 - Customize title/subtitle
 - Real-time preview
+
+#### 🌐 Translation Management (NEW!)
+- **Tree View**: Hierarchical translation structure
+- **Search**: Find translations instantly
+- **Expand/Collapse**: Navigate easily
+- **Add/Edit/Delete**: Full CRUD operations
+- **Statistics**: Track translation completeness
+- **Visual Indicators**: Icons and colors for better UX
+- **Auto-save**: Changes persist immediately
+- **Bilingual**: Manage TR and EN side-by-side
+
+#### 💾 Redis Backup System (NEW!)
+- **Create Backups**: One-click backup creation
+- **Restore**: Roll back to any backup point
+- **Rename**: Organize backups with custom names
+- **Download**: Export backups as JSON
+- **Delete**: Clean up old backups
+- **Auto-refresh**: Real-time backup list
+
+#### 📊 Site Logs (NEW!)
+- **Traffic Monitoring**: View all site visits
+- **IP Tracking**: See visitor IP addresses
+- **Request Details**: Method, path, status codes
+- **User Agents**: Browser and device info
+- **Timestamps**: Precise activity timeline
+- **Refresh/Clear**: Manage log data
 
 #### ⚡ Features Section
 - Edit feature cards
@@ -317,6 +360,18 @@ GET    /api/admin/hero                     # Get hero section
 PUT    /api/admin/hero                     # Update hero section
 GET    /api/admin/footer                   # Get footer
 PUT    /api/admin/footer                   # Update footer
+
+GET    /api/admin/translations             # Get all translations
+PUT    /api/admin/translations             # Update translations
+
+GET    /api/admin/backups                  # List all backups
+POST   /api/admin/backups                  # Create new backup
+PUT    /api/admin/backups/restore          # Restore from backup
+PUT    /api/admin/backups/rename           # Rename backup
+DELETE /api/admin/backups?filename=<name>  # Delete backup
+
+GET    /api/admin/logs                     # Get site logs
+DELETE /api/admin/logs                     # Clear logs
 
 GET    /api/admin/password                 # Get password info
 PUT    /api/admin/password                 # Change password
@@ -431,31 +486,74 @@ portfolio/
 
 ## 🎨 Key Features Showcase
 
-### 1. Multi-line Input System
+### 1. Advanced Translation System
+- **Hierarchical Structure**: Organized by sections (nav, home, portfolio, etc.)
+- **Search Functionality**: Instant search across all translations
+- **Tree Navigation**: Expand/collapse sections
+- **CRUD Operations**: Add, edit, delete translations
+- **Visual Feedback**: Icons, colors, and badges
+- **Statistics Dashboard**: Track translation progress
+- **Side-by-side Editing**: Edit TR and EN simultaneously
+
+### 2. Portfolio Showcase
+- **Modern Card Design**: Glassmorphism effects
+- **Hover Animations**: Smooth transitions on mouse over
+- **Expandable Cards**: Click to view full project details
+- **Close on Mouse Leave**: Auto-collapse when mouse exits
+- **Technology Tags**: Visual tech stack display
+- **Multiple Links**: GitHub, Live Demo, HuggingFace
+- **Drag-to-Reorder**: Admin can change display order
+
+### 3. Professional Resume System
+- **14 CV Sections**: Complete professional resume
+- **Drag-to-Reorder**: Customize section order
+- **Enable/Disable Sections**: Show only relevant sections
+- **Dynamic Forms**: Add multiple entries per section
+- **Date Ranges**: Start/End dates with "Present" option
+- **Rich Text Fields**: URLs, emails, phone numbers
+- **Export Ready**: Clean, professional formatting
+
+### 4. Backup & Recovery
+- **One-Click Backup**: Create Redis snapshots
+- **Restore Capability**: Roll back to any point
+- **Rename Support**: Organize backups logically
+- **Size Display**: Track backup file sizes
+- **Timestamp Tracking**: Know when backups were created
+- **JSON Export**: Download backups locally
+
+### 5. Site Analytics
+- **Traffic Logs**: Monitor all site visits
+- **IP Tracking**: See visitor locations
+- **Request Logging**: HTTP methods and paths
+- **Status Codes**: Track errors and successes
+- **User Agent Detection**: Browser and device info
+- **Timestamp Precision**: Exact visit times
+
+### 6. Multi-line Input System
 - Skills, Technologies, Languages
 - One item per line
 - Enter key support
 - Auto-cleanup on save
 
-### 2. Image Support
+### 7. Image Support
 - External URL support (GitHub raw, CDN, etc.)
 - Next.js Image optimization
 - Lazy loading
 - Responsive sizing
 
-### 3. Email-like Message UI
+### 8. Email-like Message UI
 - Unread messages highlighted in blue
 - "NEW" badge on unread messages
 - Click to view full message in modal
 - Delete button with confirmation
 
-### 4. Loading States
+### 9. Loading States
 - Skeleton loaders
 - Smooth transitions
 - No flash/flicker on page load
 - Professional UX
 
-### 5. Responsive Design
+### 10. Responsive Design
 - Mobile-first approach
 - Optimized navbar (no overlap)
 - Touch-friendly buttons

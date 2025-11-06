@@ -2499,7 +2499,8 @@ Hiking"
 }
 
 function TranslationEditor({ data, onChange }: { data: any; onChange: (data: any) => void }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set(['nav', 'home']));
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(['nav', 'home', 'admin']));
+  const [searchTerm, setSearchTerm] = useState('');
   
   const toggleExpand = (key: string) => {
     const newExpanded = new Set(expanded);
@@ -2509,6 +2510,26 @@ function TranslationEditor({ data, onChange }: { data: any; onChange: (data: any
       newExpanded.add(key);
     }
     setExpanded(newExpanded);
+  };
+  
+  const expandAll = () => {
+    const allKeys = new Set<string>();
+    const collectKeys = (obj: any, path: string[] = []) => {
+      for (const [key, value] of Object.entries(obj)) {
+        const currentPath = [...path, key];
+        const pathStr = currentPath.join('.');
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          allKeys.add(pathStr);
+          collectKeys(value, currentPath);
+        }
+      }
+    };
+    collectKeys(data);
+    setExpanded(allKeys);
+  };
+  
+  const collapseAll = () => {
+    setExpanded(new Set());
   };
   
   const updateValue = (path: string[], value: string) => {
@@ -2522,6 +2543,39 @@ function TranslationEditor({ data, onChange }: { data: any; onChange: (data: any
     onChange(newData);
   };
   
+  const addNewKey = (parentPath: string[] = []) => {
+    const key = prompt('Yeni anahtar adı:');
+    if (!key) return;
+    
+    const newData = JSON.parse(JSON.stringify(data));
+    let current: any = newData;
+    for (const p of parentPath) {
+      if (!current[p]) current[p] = {};
+      current = current[p];
+    }
+    current[key] = '';
+    onChange(newData);
+  };
+  
+  const deleteKey = (path: string[]) => {
+    if (!confirm(`"${path.join('.')}" anahtarını silmek istediğinize emin misiniz?`)) return;
+    
+    const newData = JSON.parse(JSON.stringify(data));
+    let current: any = newData;
+    for (let i = 0; i < path.length - 1; i++) {
+      current = current[path[i]];
+    }
+    delete current[path[path.length - 1]];
+    onChange(newData);
+  };
+  
+  const matchesSearch = (pathStr: string, value: any): boolean => {
+    if (!searchTerm) return true;
+    const search = searchTerm.toLowerCase();
+    return pathStr.toLowerCase().includes(search) || 
+           (typeof value === 'string' && value.toLowerCase().includes(search));
+  };
+  
   const renderObject = (obj: any, path: string[] = []): React.JSX.Element[] => {
     const elements: React.JSX.Element[] = [];
     for (const [key, value] of Object.entries(obj)) {
@@ -2530,34 +2584,73 @@ function TranslationEditor({ data, onChange }: { data: any; onChange: (data: any
       
       if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
         const isExpanded = expanded.has(pathStr);
+        const childCount = Object.keys(value).length;
+        
         elements.push(
           <div key={pathStr} className="mb-2">
-            <button
-              onClick={() => toggleExpand(pathStr)}
-              className="w-full text-left px-3 py-2 bg-zinc-100 dark:bg-zinc-700 rounded flex items-center justify-between hover:bg-zinc-200 dark:hover:bg-zinc-600"
-            >
-              <span className="font-semibold text-zinc-900 dark:text-zinc-100">{key}</span>
-              <span className="text-zinc-600 dark:text-zinc-400">{isExpanded ? '?' : '?'}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => toggleExpand(pathStr)}
+                className="flex-1 text-left px-3 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-zinc-700 dark:to-zinc-700 rounded-lg flex items-center justify-between hover:from-blue-100 hover:to-indigo-100 dark:hover:from-zinc-600 dark:hover:to-zinc-600 transition-all"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">{isExpanded ? '📂' : '📁'}</span>
+                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">{key}</span>
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400">({childCount} öğe)</span>
+                </div>
+                <span className="text-zinc-600 dark:text-zinc-400 text-xl">{isExpanded ? '▼' : '▶'}</span>
+              </button>
+              <button
+                onClick={() => addNewKey(currentPath)}
+                className="px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
+                title="Alt öğe ekle"
+              >
+                ➕
+              </button>
+              <button
+                onClick={() => deleteKey(currentPath)}
+                className="px-3 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors"
+                title="Sil"
+              >
+                🗑️
+              </button>
+            </div>
             {isExpanded && (
-              <div className="ml-4 mt-2 space-y-2">
+              <div className="ml-6 mt-2 space-y-2 border-l-2 border-blue-200 dark:border-zinc-600 pl-4">
                 {renderObject(value, currentPath)}
               </div>
             )}
           </div>
         );
       } else {
+        if (!matchesSearch(pathStr, value)) continue;
+        
         elements.push(
-          <div key={pathStr} className="mb-3">
-            <label className="block text-sm font-medium mb-1 text-zinc-700 dark:text-zinc-300">
-              {pathStr}
-            </label>
-            <textarea
-              value={String(value || '')}
-              onChange={(e) => updateValue(currentPath, e.target.value)}
-              rows={2}
-              className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 text-sm"
-            />
+          <div key={pathStr} className="mb-3 group">
+            <div className="flex items-start gap-2">
+              <div className="flex-1">
+                <label className="flex items-center justify-between text-sm font-medium mb-1 text-zinc-700 dark:text-zinc-300">
+                  <span className="flex items-center gap-2">
+                    <span className="text-blue-500">🔑</span>
+                    <span className="font-mono text-xs bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded">{pathStr}</span>
+                  </span>
+                </label>
+                <textarea
+                  value={String(value || '')}
+                  onChange={(e) => updateValue(currentPath, e.target.value)}
+                  rows={Math.min(Math.max(1, Math.ceil(String(value || '').length / 60)), 4)}
+                  className="w-full px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 text-sm focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 transition-all"
+                  placeholder="Çeviri metnini girin..."
+                />
+              </div>
+              <button
+                onClick={() => deleteKey(currentPath)}
+                className="mt-6 px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 transition-colors opacity-0 group-hover:opacity-100"
+                title="Sil"
+              >
+                🗑️
+              </button>
+            </div>
           </div>
         );
       }
@@ -2566,12 +2659,62 @@ function TranslationEditor({ data, onChange }: { data: any; onChange: (data: any
   };
   
   return (
-    <div className="max-h-[600px] overflow-y-auto">
-      {Object.keys(data).length === 0 ? (
-        <p className="text-zinc-600 dark:text-zinc-400 text-sm">Çeviri verisi yok. İlk çevirileri ekleyin.</p>
-      ) : (
-        renderObject(data)
-      )}
+    <div className="space-y-4">
+      {/* Search and Controls */}
+      <div className="flex flex-wrap gap-3 items-center bg-gradient-to-r from-zinc-50 to-zinc-100 dark:from-zinc-800 dark:to-zinc-700 p-4 rounded-lg">
+        <div className="flex-1 min-w-[200px]">
+          <input
+            type="text"
+            placeholder="🔍 Ara..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full px-4 py-2 border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <button
+          onClick={expandAll}
+          className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-2"
+        >
+          <span>📂</span> Tümünü Aç
+        </button>
+        <button
+          onClick={collapseAll}
+          className="px-4 py-2 bg-zinc-500 text-white rounded-lg hover:bg-zinc-600 transition-colors flex items-center gap-2"
+        >
+          <span>📁</span> Tümünü Kapat
+        </button>
+        <button
+          onClick={() => addNewKey()}
+          className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-2"
+        >
+          <span>➕</span> Yeni Bölüm
+        </button>
+      </div>
+      
+      {/* Translation Tree */}
+      <div className="max-h-[600px] overflow-y-auto pr-2 space-y-2">
+        {Object.keys(data).length === 0 ? (
+          <div className="text-center py-12">
+            <p className="text-zinc-600 dark:text-zinc-400 text-lg mb-4">📝 Henüz çeviri verisi yok</p>
+            <button
+              onClick={() => addNewKey()}
+              className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+            >
+              ➕ İlk Çeviriyi Ekle
+            </button>
+          </div>
+        ) : (
+          renderObject(data)
+        )}
+      </div>
+      
+      {/* Statistics */}
+      <div className="bg-gradient-to-r from-zinc-50 to-zinc-100 dark:from-zinc-800 dark:to-zinc-700 p-4 rounded-lg">
+        <div className="flex flex-wrap gap-4 text-sm text-zinc-700 dark:text-zinc-300">
+          <span>📊 Toplam Bölüm: <strong>{Object.keys(data).length}</strong></span>
+          <span>🔑 Toplam Anahtar: <strong>{JSON.stringify(data).split('"').length / 2}</strong></span>
+        </div>
+      </div>
     </div>
   );
 }
