@@ -47,6 +47,7 @@ services:
       - SMTP_USER=${SMTP_USER:-muhammedozer32@gmail.com}
       - SMTP_PASSWORD=${SMTP_PASSWORD}
       - MAIL_FROM=${MAIL_FROM:-info@ertugrulozer.com.tr}
+      - BASE_URL=${BASE_URL:-http://localhost:3000}
     expose:
       - "8080"
     depends_on:
@@ -56,6 +57,7 @@ services:
       - portfolio-network
     volumes:
       - backup-data:/data/backups
+      - uploads-data:/app/uploads
     # Health check
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
@@ -74,6 +76,7 @@ services:
       - SMTP_USER=${SMTP_USER:-muhammedozer32@gmail.com}
       - SMTP_PASSWORD=${SMTP_PASSWORD}
       - MAIL_FROM=${MAIL_FROM:-info@ertugrulozer.com.tr}
+      - BASE_URL=${BASE_URL:-http://localhost:3000}
     expose:
       - "8080"
     depends_on:
@@ -83,6 +86,7 @@ services:
       - portfolio-network
     volumes:
       - backup-data:/data/backups
+      - uploads-data:/app/uploads
     # Health check
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
@@ -116,3 +120,4 @@ networks:
 volumes:
   redis-data:
   backup-data:
+  uploads-data:

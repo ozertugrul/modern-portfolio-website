@@ -1,10 +1,12 @@
 use axum::{
-    extract::{Extension, Query},
+    extract::{Extension, Query, Path},
     http::StatusCode,
-    response::Json,
+    response::{Json, Response},
     routing::{delete, get, post, put},
     Router,
+    body::{Bytes, Body},
 };
+use axum_extra::extract::Multipart;
 use axum_sessions::{SessionLayer, extractors::ReadableSession, extractors::WritableSession};
 use async_redis_session::RedisSessionStore;
 use serde::{Deserialize, Serialize};
@@ -16,9 +18,10 @@ use tower_http::cors::CorsLayer;
 use redis::Client as RedisClient;
 use uuid::Uuid;
 use lettre::{Message, SmtpTransport, Transport};
-use lettre::message::{header, MultiPart, SinglePart};
+use lettre::message::{header, MultiPart, SinglePart, Attachment};
 use lettre::transport::smtp::authentication::Credentials;
 use mailparse::MailHeaderMap;
+use std::path::PathBuf;
 
 // Data structures
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -326,6 +329,28 @@ async fn require_admin(session: ReadableSession) -> Result<(), StatusCode> {
 // Helper: Get Redis connection
 async fn get_redis_conn(state: &AppState) -> Result<redis::aio::MultiplexedConnection> {
     Ok(state.redis_client.get_multiplexed_async_connection().await?)
+}
+
+// Helper: Strip HTML tags for plain text
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::new();
+    let mut in_tag = false;
+    
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => result.push(c),
+            _ => {}
+        }
+    }
+    
+    result
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
 }
 
 // Public endpoints
@@ -1052,12 +1077,85 @@ async fn admin_delete_contact(
     Ok(Json(serde_json::json!({"success": true})))
 }
 
+// Admin: File upload for email attachments
+async fn admin_upload_file(
+    session: ReadableSession,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    require_admin(session).await?;
+    
+    // Create uploads directory if it doesn't exist
+    let upload_dir = PathBuf::from("uploads");
+    if !upload_dir.exists() {
+        std::fs::create_dir_all(&upload_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    
+    while let Some(field) = multipart.next_field().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+        let file_name = field.file_name()
+            .ok_or(StatusCode::BAD_REQUEST)?
+            .to_string();
+        
+        let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+        
+        // Generate unique filename
+        let unique_name = format!("{}_{}", Uuid::new_v4(), file_name);
+        let file_path = upload_dir.join(&unique_name);
+        
+        // Save file
+        std::fs::write(&file_path, &data).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        
+        // Return URL to access the file
+        return Ok(Json(serde_json::json!({
+            "success": true,
+            "url": format!("/uploads/{}", unique_name),
+            "filename": file_name
+        })));
+    }
+    
+    Err(StatusCode::BAD_REQUEST)
+}
+
+// Serve uploaded files
+async fn serve_uploaded_file(
+    Path(filename): Path<String>,
+) -> Result<Response<Body>, StatusCode> {
+    let file_path = PathBuf::from("uploads").join(&filename);
+    
+    if !file_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    
+    let file_data = std::fs::read(&file_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Determine content type from extension
+    let content_type = if filename.ends_with(".pdf") {
+        "application/pdf"
+    } else if filename.ends_with(".jpg") || filename.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if filename.ends_with(".png") {
+        "image/png"
+    } else if filename.ends_with(".txt") {
+        "text/plain"
+    } else if filename.ends_with(".doc") || filename.ends_with(".docx") {
+        "application/msword"
+    } else {
+        "application/octet-stream"
+    };
+    
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", content_type)
+        .body(Body::from(file_data))
+        .unwrap())
+}
+
 // Admin: Reply to contact
 #[derive(Deserialize)]
 struct EmailReplyRequest {
     contact_id: String,
     subject: String,
     message: String,
+    attachments: Option<Vec<String>>, // File paths in uploads directory
 }
 
 async fn admin_reply_contact(
@@ -1092,31 +1190,145 @@ async fn admin_reply_contact(
     let smtp_user = env::var("SMTP_USER").unwrap_or_else(|_| "info@ertugrulozer.com.tr".to_string());
     let smtp_pass = env::var("SMTP_PASSWORD").unwrap_or_default();
     let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "info@ertugrulozer.com.tr".to_string());
+    let base_url = env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     
     // Build email with proper From header including name
     let from_address = format!("Ertuğrul Özer <{}>", mail_from);
-    let email = Message::builder()
+    
+    // Check if message contains HTML tags
+    let is_html = payload.message.contains("<") && payload.message.contains(">");
+    
+    // Extract attachment URLs from HTML href="/uploads/..." and convert to full URLs
+    let mut extracted_attachments = Vec::new();
+    let mut modified_message = payload.message.clone();
+    
+    if is_html {
+        // Find all href="/uploads/..." patterns and replace with full URLs
+        let re = regex::Regex::new(r#"href="(/uploads/[^"]+)""#).unwrap();
+        for cap in re.captures_iter(&payload.message) {
+            if let Some(url_path) = cap.get(1) {
+                let url_path_str = url_path.as_str();
+                extracted_attachments.push(url_path_str.to_string());
+                // Replace relative URL with absolute URL in HTML
+                let full_url = format!("{}{}", base_url, url_path_str);
+                modified_message = modified_message.replace(
+                    &format!(r#"href="{}""#, url_path_str),
+                    &format!(r#"href="{}""#, full_url)
+                );
+            }
+        }
+    }
+    
+    // Combine extracted attachments with payload attachments
+    let mut all_attachments = extracted_attachments;
+    if let Some(payload_attachments) = &payload.attachments {
+        all_attachments.extend(payload_attachments.clone());
+    }
+    
+    // Build multipart with content
+    let mut multipart_content = if is_html {
+        MultiPart::alternative()
+            .singlepart(
+                SinglePart::builder()
+                    .header(header::ContentType::TEXT_PLAIN)
+                    .body(strip_html_tags(&modified_message))
+            )
+            .singlepart(
+                SinglePart::builder()
+                    .header(header::ContentType::TEXT_HTML)
+                    .body(format!(
+                        r#"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        a {{ color: #2563eb; text-decoration: underline; }}
+        .email-content {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+    </style>
+</head>
+<body>
+    <div class="email-content">
+        {}
+    </div>
+</body>
+</html>"#,
+                        modified_message
+                    ))
+            )
+    } else {
+        MultiPart::alternative()
+            .singlepart(
+                SinglePart::builder()
+                    .header(header::ContentType::TEXT_PLAIN)
+                    .body(modified_message.clone())
+            )
+            .singlepart(
+                SinglePart::builder()
+                    .header(header::ContentType::TEXT_HTML)
+                    .body(format!(
+                        "<html><body><p>{}</p></body></html>",
+                        modified_message.replace("\n", "<br>")
+                    ))
+            )
+    };
+    
+    // Build email - with or without attachments
+    let mut email_builder = Message::builder()
         .from(from_address.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
         .reply_to(mail_from.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
         .to(contact.email.parse().map_err(|_| StatusCode::BAD_REQUEST)?)
-        .subject(&payload.subject)
-        .multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(header::ContentType::TEXT_PLAIN)
-                        .body(payload.message.clone())
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(header::ContentType::TEXT_HTML)
-                        .body(format!(
-                            "<html><body><p>{}</p></body></html>",
-                            payload.message.replace("\n", "<br>")
-                        ))
-                )
-        )
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .subject(&payload.subject);
+    
+    let email = if !all_attachments.is_empty() {
+            // With attachments - use mixed multipart
+            let mut mixed = MultiPart::mixed()
+                .multipart(multipart_content);
+            
+            // Add each attachment
+            for url in &all_attachments {
+                // Extract filename from URL (/uploads/uuid_filename.ext)
+                if let Some(filename) = url.strip_prefix("/uploads/") {
+                    let file_path = PathBuf::from("uploads").join(filename);
+                    if file_path.exists() {
+                        if let Ok(file_data) = std::fs::read(&file_path) {
+                            // Get original filename (after uuid_)
+                            let original_name = filename.split('_').skip(1).collect::<Vec<_>>().join("_");
+                            
+                            // Determine content type from extension
+                            let content_type = if original_name.ends_with(".pdf") {
+                                header::ContentType::parse("application/pdf").unwrap()
+                            } else if original_name.ends_with(".jpg") || original_name.ends_with(".jpeg") {
+                                header::ContentType::parse("image/jpeg").unwrap()
+                            } else if original_name.ends_with(".png") {
+                                header::ContentType::parse("image/png").unwrap()
+                            } else if original_name.ends_with(".txt") {
+                                header::ContentType::parse("text/plain").unwrap()
+                            } else if original_name.ends_with(".doc") || original_name.ends_with(".docx") {
+                                header::ContentType::parse("application/msword").unwrap()
+                            } else {
+                                header::ContentType::parse("application/octet-stream").unwrap()
+                            };
+                            
+                            mixed = mixed.singlepart(
+                                Attachment::new(original_name)
+                                    .body(file_data, content_type)
+                            );
+                        }
+                    }
+                }
+            }
+            
+            email_builder
+                .multipart(mixed)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        } else {
+            // No attachments
+            email_builder
+                .multipart(multipart_content)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        };
     
     // Send email with or without authentication
     let mailer = if smtp_pass.is_empty() {
@@ -1575,6 +1787,8 @@ async fn main() -> Result<()> {
         .route("/api/admin/backups/restore", post(admin_restore_backup))
         .route("/api/admin/backups/rename", post(admin_rename_backup))
         .route("/api/admin/backups/:filename", delete(admin_delete_backup))
+        .route("/api/admin/upload", post(admin_upload_file))
+        .route("/uploads/:filename", get(serve_uploaded_file))
         .layer(axum::middleware::from_fn_with_state(
             app_state.clone(),
             log_visitor

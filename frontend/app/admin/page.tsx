@@ -4,6 +4,12 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLocale } from '@/contexts/LocaleContext';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
+import dynamic from 'next/dynamic';
+
+const RichTextEditor = dynamic(() => import('@/components/RichTextEditor').then(mod => ({ default: mod.RichTextEditor })), {
+  ssr: false,
+  loading: () => <div className="p-4 text-zinc-500">Editör yükleniyor...</div>
+});
 
 interface PortfolioItem {
   id: string;
@@ -1049,12 +1055,10 @@ Redis"
                           <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">
                             Mesaj
                           </label>
-                          <textarea
-                            value={replyMessage}
-                            onChange={(e) => setReplyMessage(e.target.value)}
-                            rows={6}
+                          <RichTextEditor
+                            content={replyMessage}
+                            onChange={setReplyMessage}
                             placeholder="Yanıtınızı yazın..."
-                            className="w-full p-3 border border-zinc-300 dark:border-zinc-600 rounded-lg bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100"
                           />
                         </div>
                         <div className="flex gap-2">
