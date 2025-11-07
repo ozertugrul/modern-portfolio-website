@@ -162,6 +162,15 @@ interface ContactMessage {
   read: boolean;
 }
 
+interface InboxEmail {
+  id: string;
+  from: string;
+  subject: string;
+  body: string;
+  date: string;
+  read: boolean;
+}
+
 export default function AdminPanel() {
   const { t, locale } = useLocale();
   const router = useRouter();
@@ -187,6 +196,10 @@ export default function AdminPanel() {
   const [replySubject, setReplySubject] = useState('');
   const [replyMessage, setReplyMessage] = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
+  const [inboxEmails, setInboxEmails] = useState<InboxEmail[]>([]);
+  const [showInbox, setShowInbox] = useState(false);
+  const [selectedInboxEmail, setSelectedInboxEmail] = useState<InboxEmail | null>(null);
+  const [loadingInbox, setLoadingInbox] = useState(false);
   
   // Logs state
   const [logs, setLogs] = useState<any[]>([]);
@@ -387,6 +400,24 @@ export default function AdminPanel() {
         const data = await resHero.json();
         setHeroData(data);
       }
+    }
+  };
+
+  const fetchInboxEmails = async () => {
+    setLoadingInbox(true);
+    try {
+      const res = await fetch('/api/admin/contacts/inbox');
+      if (res.ok) {
+        const data = await res.json();
+        setInboxEmails(data);
+      } else {
+        alert('Gelen kutusu alınamadı. IMAP ayarlarını kontrol edin.');
+      }
+    } catch (error) {
+      console.error('Inbox fetch error:', error);
+      alert('Gelen kutusu alınırken bir hata oluştu.');
+    } finally {
+      setLoadingInbox(false);
     }
   };
 

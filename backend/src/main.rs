@@ -18,6 +18,7 @@ use uuid::Uuid;
 use lettre::{Message, SmtpTransport, Transport};
 use lettre::message::{header, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
+use mailparse::MailHeaderMap;
 
 // Data structures
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -229,6 +230,16 @@ struct ChangePasswordRequest {
 struct PasswordResponse {
     success: bool,
     message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct InboxEmail {
+    id: String,
+    from: String,
+    subject: String,
+    body: String,
+    date: String,
+    read: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1080,10 +1091,13 @@ async fn admin_reply_contact(
         .parse::<u16>().unwrap_or(587);
     let smtp_user = env::var("SMTP_USER").unwrap_or_else(|_| "info@ertugrulozer.com.tr".to_string());
     let smtp_pass = env::var("SMTP_PASSWORD").unwrap_or_default();
+    let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "info@ertugrulozer.com.tr".to_string());
     
-    // Build email
+    // Build email with proper From header including name
+    let from_address = format!("Ertuğrul Özer <{}>", mail_from);
     let email = Message::builder()
-        .from(smtp_user.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+        .from(from_address.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+        .reply_to(mail_from.parse().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
         .to(contact.email.parse().map_err(|_| StatusCode::BAD_REQUEST)?)
         .subject(&payload.subject)
         .multipart(
@@ -1108,25 +1122,53 @@ async fn admin_reply_contact(
     let mailer = if smtp_pass.is_empty() {
         // No authentication (for local mail servers like Postfix)
         SmtpTransport::relay(&smtp_host)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(|e| {
+                eprintln!("SMTP relay error: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
             .port(smtp_port)
             .build()
     } else {
         // With authentication (for external SMTP like Gmail)
         let creds = Credentials::new(smtp_user.clone(), smtp_pass);
-        SmtpTransport::relay(&smtp_host)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        SmtpTransport::starttls_relay(&smtp_host)
+            .map_err(|e| {
+                eprintln!("SMTP starttls_relay error: {:?}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
             .port(smtp_port)
             .credentials(creds)
             .build()
     };
     
-    mailer.send(&email).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    mailer.send(&email).map_err(|e| {
+        eprintln!("Email send error: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
     Ok(Json(serde_json::json!({
         "success": true,
         "message": "Email sent successfully"
     })))
+}
+
+// Admin: Fetch inbox emails  
+async fn admin_fetch_inbox(
+    session: ReadableSession,
+    Extension(state): Extension<AppState>,
+) -> Result<Json<Vec<InboxEmail>>, StatusCode> {
+    require_admin(session).await?;
+    
+    // For Gmail with CGNAT, we recommend:
+    // 1. Set up email forwarding in Gmail to send to your contact form
+    // 2. Or use Gmail's "Fetch mail" feature to import from another account
+    // 3. All emails will appear in the contacts list automatically
+    
+    // This endpoint returns empty for now since we're using the contact form
+    // as the primary entry point for all messages (including forwarded emails)
+    let emails: Vec<InboxEmail> = vec![];
+    
+    Ok(Json(emails))
 }
 
 // Admin: Password management
@@ -1513,6 +1555,7 @@ async fn main() -> Result<()> {
         .route("/api/admin/resume", get(admin_get_resume))
         .route("/api/admin/resume", put(admin_update_resume))
         .route("/api/admin/contacts", get(admin_get_contacts))
+        .route("/api/admin/contacts/inbox", get(admin_fetch_inbox))
         .route("/api/admin/contacts/read", put(admin_mark_contact_read))
         .route("/api/admin/contacts/delete", delete(admin_delete_contact))
         .route("/api/admin/contacts/reply", post(admin_reply_contact))

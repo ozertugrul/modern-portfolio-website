@@ -42,15 +42,15 @@ services:
     environment:
       - PORT=8080
       - REDIS_URL=redis://redis:6379
-      - SMTP_HOST=${SMTP_HOST:-mailserver}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-info@ertugrulozer.com.tr}
-      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USER=${SMTP_USER:-muhammedozer32@gmail.com}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - MAIL_FROM=${MAIL_FROM:-info@ertugrulozer.com.tr}
     expose:
       - "8080"
     depends_on:
       - redis
-      - mailserver
     restart: unless-stopped
     networks:
       - portfolio-network
@@ -69,15 +69,15 @@ services:
     environment:
       - PORT=8080
       - REDIS_URL=redis://redis:6379
-      - SMTP_HOST=${SMTP_HOST:-mailserver}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
-      - SMTP_USER=${SMTP_USER:-info@ertugrulozer.com.tr}
-      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_USER=${SMTP_USER:-muhammedozer32@gmail.com}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - MAIL_FROM=${MAIL_FROM:-info@ertugrulozer.com.tr}
     expose:
       - "8080"
     depends_on:
       - redis
-      - mailserver
     restart: unless-stopped
     networks:
       - portfolio-network
@@ -108,18 +108,6 @@ services:
     # Persistence için volume
     volumes:
       - redis-data:/data
-
-  mailserver:
-    image: boky/postfix:latest
-    environment:
-      - ALLOWED_SENDER_DOMAINS=ertugrulozer.com.tr
-      - ALLOW_EMPTY_SENDER_DOMAINS=true
-    ports:
-      - "25:587"
-    restart: unless-stopped
-    networks:
-      - portfolio-network
-    hostname: mail.ertugrulozer.com.tr
 
 networks:
   portfolio-network:
