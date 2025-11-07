@@ -22,7 +22,7 @@ export function RichTextEditor({ content, onChange, placeholder }: RichTextEdito
       Link.configure({
         openOnClick: false,
         HTMLAttributes: {
-          class: 'text-blue-600 underline cursor-pointer',
+          class: 'text-white underline cursor-pointer',
         },
       }),
       TextStyle,

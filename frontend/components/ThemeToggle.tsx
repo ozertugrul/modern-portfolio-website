@@ -16,12 +16,12 @@ export function ThemeToggle() {
   return (
     <button
       onClick={handleToggle}
-      className="relative flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all duration-300 overflow-hidden group border-none outline-none focus:outline-none"
+      className="relative flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-all duration-300 overflow-hidden group focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-600 dark:focus:ring-gray-500"
       aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
       title={theme === 'light' ? 'Koyu Tema' : 'Açık Tema'}
     >
       {/* Background Animation */}
-      <div className={`absolute inset-0 bg-gradient-to-tr from-amber-200 to-yellow-100 dark:from-indigo-900 dark:to-purple-900 transition-opacity duration-500 ${isAnimating ? 'opacity-100' : 'opacity-0'}`} />
+      <div className={`absolute inset-0 bg-gradient-to-tr from-amber-200 to-yellow-100 dark:from-gray-800 dark:to-purple-900 transition-opacity duration-500 ${isAnimating ? 'opacity-100' : 'opacity-0'}`} />
       
       {/* Sun Icon */}
       <div className={`absolute inset-0 flex items-center justify-center transition-all duration-500 ${
@@ -49,7 +49,7 @@ export function ThemeToggle() {
           : 'opacity-0 -rotate-180 scale-0'
       }`}>
         <svg 
-          className="w-5 h-5 text-indigo-400 group-hover:text-indigo-300 transition-colors" 
+          className="w-5 h-5 text-gray-500 group-hover:text-indigo-300 transition-colors" 
           fill="currentColor" 
           viewBox="0 0 20 20"
         >

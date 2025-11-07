@@ -1198,25 +1198,25 @@ async fn admin_reply_contact(
     // Check if message contains HTML tags
     let is_html = payload.message.contains("<") && payload.message.contains(">");
     
-    // Extract attachment URLs from HTML href="/uploads/..." and convert to full URLs
+    // Extract attachment URLs from HTML href="/uploads/..." and convert relative URLs to absolute
     let mut extracted_attachments = Vec::new();
     let mut modified_message = payload.message.clone();
     
     if is_html {
-        // Find all href="/uploads/..." patterns and replace with full URLs
-        let re = regex::Regex::new(r#"href="(/uploads/[^"]+)""#).unwrap();
+        // Find all attachment link elements like <a href="/uploads/..." ...>📎 filename</a>
+        let re = regex::Regex::new(r#"<a[^>]*href="(/uploads/[^"]+)"[^>]*>.*?</a>"#).unwrap();
         for cap in re.captures_iter(&payload.message) {
             if let Some(url_path) = cap.get(1) {
                 let url_path_str = url_path.as_str();
                 extracted_attachments.push(url_path_str.to_string());
-                // Replace relative URL with absolute URL in HTML
-                let full_url = format!("{}{}", base_url, url_path_str);
-                modified_message = modified_message.replace(
-                    &format!(r#"href="{}""#, url_path_str),
-                    &format!(r#"href="{}""#, full_url)
-                );
             }
         }
+        // Convert relative /uploads/ URLs to absolute URLs in the HTML
+        modified_message = re.replace_all(&modified_message, |caps: &regex::Captures| {
+            let relative_url = &caps[1];
+            let absolute_url = format!("{}{}", base_url, relative_url);
+            caps[0].replace(relative_url, &absolute_url)
+        }).to_string();
     }
     
     // Combine extracted attachments with payload attachments
@@ -1243,15 +1243,12 @@ async fn admin_reply_contact(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; padding: 20px; }}
         a {{ color: #2563eb; text-decoration: underline; }}
-        .email-content {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
     </style>
 </head>
 <body>
-    <div class="email-content">
-        {}
-    </div>
+    {}
 </body>
 </html>"#,
                         modified_message

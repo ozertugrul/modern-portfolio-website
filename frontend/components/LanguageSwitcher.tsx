@@ -13,7 +13,7 @@ export function LanguageSwitcher() {
   return (
     <button
       onClick={toggleLanguage}
-      className="flex items-center gap-1 px-2 py-1 sm:px-3 sm:py-1.5 text-xs sm:text-sm font-semibold text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 border border-zinc-300 dark:border-zinc-700 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+      className="flex items-center gap-1 px-2 py-1 sm:px-3 sm:py-1.5 text-xs sm:text-sm font-semibold text-zinc-600 hover:text-zinc-900 border border-zinc-300 rounded-lg hover:bg-zinc-100 transition-colors"
       aria-label="Change language"
       title={locale === 'tr' ? 'Switch to English' : 'Türkçeye Geç'}
     >
