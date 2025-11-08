@@ -256,6 +256,8 @@ struct Footer {
     text_tr: String,
     text_en: String,
     enabled: bool,
+    #[serde(default)]
+    show_backend: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -592,6 +594,7 @@ async fn get_footer(Extension(state): Extension<AppState>) -> Result<Json<Footer
             text_tr: "© 2025 Ertu. Rust ile geliştirildi.".to_string(),
             text_en: "© 2025 Ertu. Built with Rust.".to_string(),
             enabled: true,
+            show_backend: false,
         }))
     }
 }
@@ -1584,7 +1587,16 @@ async fn log_visitor(
         .map(|s| s.to_string());
 
     // Execute the request
-    let response = next.run(req).await;
+    let mut response = next.run(req).await;
+
+    // Add backend server identifier header
+    let hostname = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("CONTAINER_NAME"))
+        .unwrap_or_else(|_| "backend-unknown".to_string());
+    
+    if let Ok(value) = axum::http::HeaderValue::from_str(&hostname) {
+        response.headers_mut().insert("X-Backend-Server", value);
+    }
 
     // Log to Redis (fire and forget)
     let ip = addr.ip().to_string();

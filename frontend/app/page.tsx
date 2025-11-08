@@ -130,6 +130,8 @@ export default function Home() {
   const [footerText, setFooterText] = useState<string>(t.footer.text);
   const [footerEnabled, setFooterEnabled] = useState<boolean>(true);
   const [footerLoaded, setFooterLoaded] = useState<boolean>(false);
+  const [showBackend, setShowBackend] = useState<boolean>(false);
+  const [backendInfo, setBackendInfo] = useState<string>('');
   const [hero, setHero] = useState<any>(null);
   const [heroLoading, setHeroLoading] = useState<boolean>(true);
   const [features, setFeatures] = useState<any>(null);
@@ -212,12 +214,25 @@ export default function Home() {
           setFooterText(data.text_en);
         }
         setFooterEnabled(data.enabled ?? true);
+        setShowBackend(data.show_backend ?? false);
         setFooterLoaded(true);
       })
       .catch(err => {
         console.error('Footer fetch error:', err);
         setFooterLoaded(true); // Fallback to i18n text
       });
+    
+    // Fetch backend info
+    if (typeof window !== 'undefined') {
+      fetch('/api/portfolio', { cache: 'no-store' })
+        .then(res => {
+          const server = res.headers.get('X-Backend-Server') || res.headers.get('x-backend-server');
+          if (server) {
+            setBackendInfo(server);
+          }
+        })
+        .catch(() => {});
+    }
   }, [locale]);
 
   const handleContactSubmit = async (e: React.FormEvent) => {
@@ -964,6 +979,11 @@ export default function Home() {
         <footer className="mt-auto border-t border-zinc-200 dark:border-zinc-800 py-8 bg-white dark:bg-zinc-900 animate-slide-up">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-zinc-600 dark:text-zinc-400">
             <p className="text-sm">{footerText} © 2025</p>
+            {showBackend && backendInfo && (
+              <p className="text-xs mt-2 text-zinc-500 dark:text-zinc-500">
+                🖥️ Served by: <span className="font-mono text-blue-600 dark:text-blue-400">{backendInfo}</span>
+              </p>
+            )}
           </div>
         </footer>
       )}

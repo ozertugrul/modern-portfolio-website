@@ -42,6 +42,7 @@ services:
     environment:
       - PORT=8080
       - REDIS_URL=redis://redis:6379
+      - HOSTNAME=backend1
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER:-muhammedozer32@gmail.com}
@@ -71,6 +72,7 @@ services:
     environment:
       - PORT=8080
       - REDIS_URL=redis://redis:6379
+      - HOSTNAME=backend2
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER:-muhammedozer32@gmail.com}
