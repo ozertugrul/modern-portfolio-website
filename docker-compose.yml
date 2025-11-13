@@ -1,4 +1,4 @@
-version: "3.9"
+kversion: "3.9"
 
 services:
   nginx:
@@ -29,7 +29,6 @@ services:
     restart: unless-stopped
     networks:
       - portfolio-network
-    # Health check
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000"]
       interval: 30s
@@ -42,6 +41,7 @@ services:
     environment:
       - PORT=8080
       - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://portfolio_user:portfolio_secure_pass_2025@postgres:5432/portfolio_db
       - HOSTNAME=backend1
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -59,7 +59,6 @@ services:
     volumes:
       - backup-data:/data/backups
       - uploads-data:/app/uploads
-    # Health check
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -72,6 +71,7 @@ services:
     environment:
       - PORT=8080
       - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://portfolio_user:portfolio_secure_pass_2025@postgres:5432/portfolio_db
       - HOSTNAME=backend2
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
@@ -83,13 +83,13 @@ services:
       - "8080"
     depends_on:
       - redis
+      - postgres
     restart: unless-stopped
     networks:
       - portfolio-network
     volumes:
       - backup-data:/data/backups
       - uploads-data:/app/uploads
-    # Health check
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -105,15 +105,34 @@ services:
     restart: unless-stopped
     networks:
       - portfolio-network
-    # Health check
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
       timeout: 10s
       retries: 3
-    # Persistence için volume
     volumes:
       - redis-data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=portfolio_user
+      - POSTGRES_PASSWORD=portfolio_secure_pass_2025
+      - POSTGRES_DB=portfolio_db
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - portfolio-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio_user -d portfolio_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d
 
 networks:
   portfolio-network:
@@ -121,5 +140,7 @@ networks:
 
 volumes:
   redis-data:
+  postgres-data:
   backup-data:
   uploads-data:
+

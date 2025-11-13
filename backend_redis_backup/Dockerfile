@@ -1,6 +1,5 @@
 # --- Build aşaması ---
 FROM rust:1.83 AS builder
-
 WORKDIR /app
 
 # Önce sadece dependency dosyalarını kopyala (cache için)
@@ -24,7 +23,7 @@ RUN rm -rf target/release/.fingerprint/backend-* target/release/deps/backend* &&
 # --- Çalışma aşaması ---
 FROM debian:bookworm-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y wget postgresql-client && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/backend .
 EXPOSE 8080
 CMD ["./backend"]

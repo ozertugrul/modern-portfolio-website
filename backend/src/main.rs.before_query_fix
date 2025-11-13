@@ -4,12 +4,13 @@ use axum::{
     response::{Json, Response},
     routing::{delete, get, post, put},
     Router,
-    body::{Bytes, Body},
+    body::Body,
 };
 use axum_extra::extract::Multipart;
 use axum_sessions::{SessionLayer, extractors::ReadableSession, extractors::WritableSession};
 use async_redis_session::RedisSessionStore;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -22,6 +23,8 @@ use lettre::message::{header, MultiPart, SinglePart, Attachment};
 use lettre::transport::smtp::authentication::Credentials;
 use mailparse::MailHeaderMap;
 use std::path::PathBuf;
+use sqlx::{PgPool, postgres::PgPoolOptions, FromRow, Type};
+use sqlx::types::Json as SqlxJson;
 
 // Data structures
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -210,35 +213,6 @@ struct BackupInfo {
     filename: String,
     size: u64,
     created_at: String,
-    backup_type: String, // "redis" or "postgresql" or "full"
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct FullBackup {
-    redis_data: serde_json::Map<String, serde_json::Value>,
-    postgres_data: PostgresBackupData,
-    metadata: BackupMetadata,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct BackupMetadata {
-    created_at: String,
-    version: String,
-    backup_type: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct PostgresBackupData {
-    portfolio_items: Vec<serde_json::Value>,
-    about_info: Option<serde_json::Value>,
-    resume_data: Option<serde_json::Value>,
-    contact_messages: Vec<serde_json::Value>,
-    translations: Option<serde_json::Value>,
-    footer_settings: Option<serde_json::Value>,
-    features: Option<serde_json::Value>,
-    hero_section: Option<serde_json::Value>,
-    admin_users: Vec<serde_json::Value>,
-    visitor_logs: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -324,16 +298,14 @@ struct HealthCheck {
 // App state
 #[derive(Clone)]
 struct AppState {
-    redis_client: Arc<RedisClient>,
+    db_pool: PgPool,
+    redis_client: Arc<RedisClient>, // Only for sessions
 }
 
-// Redis keys
-const REDIS_PORTFOLIO_KEY: &str = "portfolio:items";
-const REDIS_ABOUT_KEY: &str = "about:info";
-const REDIS_RESUME_KEY: &str = "resume:data";
-const REDIS_CONTACTS_KEY: &str = "contacts:messages";
-const REDIS_ADMIN_PASSWORD_KEY: &str = "admin:password_hash";
-const REDIS_TRANSLATIONS_KEY: &str = "translations:data";
+// Old Redis keys - no longer used (kept for reference during migration)
+// const REDIS_PORTFOLIO_KEY: &str = "portfolio:items";
+// const REDIS_ABOUT_KEY: &str = "about:info";
+// etc...
 const REDIS_FOOTER_KEY: &str = "footer:text";
 const REDIS_FEATURES_KEY: &str = "features:data";
 const REDIS_HERO_KEY: &str = "hero:section";
@@ -386,92 +358,176 @@ fn strip_html_tags(html: &str) -> String {
 
 // Public endpoints
 async fn get_portfolio(Extension(state): Extension<AppState>) -> Result<Json<Vec<PortfolioItem>>, StatusCode> {
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = sqlx::query!(
+        r#"
+        SELECT 
+            id::text,
+            title,
+            description,
+            technologies as "technologies!: sqlx::types::Json<Vec<String>>",
+            image_url,
+            github_url,
+            live_url,
+            huggingface_url,
+            display_order
+        FROM portfolio_items
+        ORDER BY display_order ASC
+        "#
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in get_portfolio: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_PORTFOLIO_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let portfolio_items: Vec<PortfolioItem> = items
+        .into_iter()
+        .map(|row| PortfolioItem {
+            id: row.id,
+            title: row.title,
+            description: row.description,
+            technologies: row.technologies.0,
+            image_url: row.image_url,
+            github_url: row.github_url,
+            live_url: row.live_url,
+            huggingface_url: row.huggingface_url,
+            order: Some(row.display_order),
+        })
+        .collect();
     
-    if let Some(json_str) = data {
-        let mut items: Vec<PortfolioItem> = serde_json::from_str(&json_str)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        
-        // Sort by order field
-        items.sort_by_key(|item| item.order.unwrap_or(999999));
-        
-        Ok(Json(items))
-    } else {
-        // Default portfolio items
-        let default_items = vec![
-            PortfolioItem {
-                id: "1".to_string(),
-                title: "E-Commerce Platform".to_string(),
-                description: "Rust ve React kullanarak geliştirdiğim modern bir e-ticaret platformu. Yüksek performanslı backend ve responsive frontend.".to_string(),
-                technologies: vec!["Rust".to_string(), "React".to_string(), "PostgreSQL".to_string()],
-                image_url: Some("https://via.placeholder.com/600x400".to_string()),
-                github_url: Some("https://github.com/example".to_string()),
-                live_url: Some("https://example.com".to_string()),
-                huggingface_url: None,
-                order: Some(0),
-            },
-        ];
-        Ok(Json(default_items))
-    }
+    Ok(Json(portfolio_items))
 }
 
 async fn get_about(Extension(state): Extension<AppState>) -> Result<Json<About>, StatusCode> {
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let about = sqlx::query!(
+        r#"
+        SELECT 
+            name,
+            title,
+            bio,
+            skills as "skills!: sqlx::types::Json<Vec<String>>",
+            email,
+            github,
+            linkedin
+        FROM about_info
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in get_about: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_ABOUT_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    if let Some(json_str) = data {
-        let about: About = serde_json::from_str(&json_str)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(Json(about))
+    if let Some(row) = about {
+        Ok(Json(About {
+            name: row.name,
+            title: row.title,
+            bio: row.bio,
+            skills: row.skills.0,
+            email: row.email,
+            github: row.github,
+            linkedin: row.linkedin,
+        }))
     } else {
-        // Default about
-        let default_about = About {
+        // Return default if not set
+        Ok(Json(About {
             name: "Ertu".to_string(),
             title: "Rust Backend Developer".to_string(),
-            bio: "Rust programlama dili ile yüksek performanslı backend sistemleri geliştiriyorum. Yatay ölçeklenebilir mimariler ve mikroservis tasarımları konusunda deneyimliyim.".to_string(),
+            bio: "Rust programlama dili ile yüksek performanslı backend sistemleri geliştiriyorum.".to_string(),
             skills: vec![
                 "Rust".to_string(),
                 "Backend Development".to_string(),
-                "Microservices".to_string(),
+                "PostgreSQL".to_string(),
                 "Docker".to_string(),
-                "Redis".to_string(),
-                "Load Balancing".to_string(),
             ],
             email: "ertu@example.com".to_string(),
             github: Some("https://github.com/ertu".to_string()),
             linkedin: Some("https://linkedin.com/in/ertu".to_string()),
-        };
-        Ok(Json(default_about))
+        }))
     }
 }
 
 async fn get_resume(Extension(state): Extension<AppState>) -> Result<Json<Resume>, StatusCode> {
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let resume_row = sqlx::query!(
+        r#"
+        SELECT 
+            personal_info as "personal_info!: sqlx::types::Json<PersonalInfo>",
+            section_order as "section_order: sqlx::types::Json<Vec<String>>",
+            summary,
+            summary_enabled,
+            skills as "skills!: sqlx::types::Json<Vec<String>>",
+            skills_enabled,
+            soft_skills as "soft_skills!: sqlx::types::Json<Vec<String>>",
+            soft_skills_enabled,
+            education as "education!: sqlx::types::Json<Vec<Education>>",
+            education_enabled,
+            experience as "experience!: sqlx::types::Json<Vec<Experience>>",
+            experience_enabled,
+            projects as "projects!: sqlx::types::Json<Vec<ResumeProject>>",
+            projects_enabled,
+            languages as "languages!: sqlx::types::Json<Vec<String>>",
+            languages_enabled,
+            certifications as "certifications!: sqlx::types::Json<Vec<Certification>>",
+            certifications_enabled,
+            awards as "awards!: sqlx::types::Json<Vec<Award>>",
+            awards_enabled,
+            publications as "publications!: sqlx::types::Json<Vec<Publication>>",
+            publications_enabled,
+            volunteer as "volunteer!: sqlx::types::Json<Vec<Volunteer>>",
+            volunteer_enabled,
+            interests as "interests!: sqlx::types::Json<Vec<String>>",
+            interests_enabled,
+            references as "references!: sqlx::types::Json<Vec<Reference>>",
+            references_enabled
+        FROM resume_data
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in get_resume: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_RESUME_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    if let Some(json_str) = data {
-        let resume: Resume = serde_json::from_str(&json_str)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(Json(resume))
+    if let Some(row) = resume_row {
+        Ok(Json(Resume {
+            id: "1".to_string(),
+            personal_info: row.personal_info.0,
+            section_order: row.section_order.map(|j| j.0),
+            summary: row.summary,
+            summary_enabled: row.summary_enabled.unwrap_or(false),
+            skills: row.skills.0,
+            skills_enabled: row.skills_enabled.unwrap_or(true),
+            soft_skills: row.soft_skills.0,
+            soft_skills_enabled: row.soft_skills_enabled.unwrap_or(true),
+            education: row.education.0,
+            education_enabled: row.education_enabled.unwrap_or(true),
+            experience: row.experience.0,
+            experience_enabled: row.experience_enabled.unwrap_or(true),
+            projects: row.projects.0,
+            projects_enabled: row.projects_enabled.unwrap_or(true),
+            languages: row.languages.0,
+            languages_enabled: row.languages_enabled.unwrap_or(true),
+            certifications: row.certifications.0,
+            certifications_enabled: row.certifications_enabled.unwrap_or(true),
+            awards: row.awards.0,
+            awards_enabled: row.awards_enabled.unwrap_or(false),
+            publications: row.publications.0,
+            publications_enabled: row.publications_enabled.unwrap_or(false),
+            volunteer: row.volunteer.0,
+            volunteer_enabled: row.volunteer_enabled.unwrap_or(false),
+            interests: row.interests.0,
+            interests_enabled: row.interests_enabled.unwrap_or(true),
+            references: row.references.0,
+            references_enabled: row.references_enabled.unwrap_or(false),
+        }))
     } else {
-        // Default resume
-        let default_resume = Resume {
+        // Return default resume
+        Ok(Json(Resume {
             id: "1".to_string(),
             personal_info: PersonalInfo {
                 name: "Ertu".to_string(),
@@ -485,11 +541,11 @@ async fn get_resume(Extension(state): Extension<AppState>) -> Result<Json<Resume
                 twitter: None,
             },
             section_order: None,
-            summary: Some("Experienced backend developer specializing in Rust and high-performance systems.".to_string()),
+            summary: Some("Experienced backend developer specializing in Rust.".to_string()),
             summary_enabled: true,
-            skills: vec!["Rust".to_string(), "Docker".to_string(), "PostgreSQL".to_string()],
+            skills: vec!["Rust".to_string(), "PostgreSQL".to_string()],
             skills_enabled: true,
-            soft_skills: vec!["Leadership".to_string(), "Problem Solving".to_string(), "Communication".to_string()],
+            soft_skills: vec!["Problem Solving".to_string()],
             soft_skills_enabled: true,
             education: vec![],
             education_enabled: true,
@@ -507,12 +563,11 @@ async fn get_resume(Extension(state): Extension<AppState>) -> Result<Json<Resume
             publications_enabled: false,
             volunteer: vec![],
             volunteer_enabled: false,
-            interests: vec!["Open Source".to_string(), "Tech Blogging".to_string()],
+            interests: vec!["Open Source".to_string()],
             interests_enabled: true,
             references: vec![],
             references_enabled: false,
-        };
-        Ok(Json(default_resume))
+        }))
     }
 }
 
@@ -524,42 +579,22 @@ async fn contact(
     let email = payload.get("email").and_then(|v| v.as_str()).ok_or(StatusCode::BAD_REQUEST)?;
     let message = payload.get("message").and_then(|v| v.as_str()).ok_or(StatusCode::BAD_REQUEST)?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let contact = ContactRequest {
-        id: Uuid::new_v4().to_string(),
-        name: name.to_string(),
-        email: email.to_string(),
-        message: message.to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        read: false,
-    };
-    
-    let mut contacts: Vec<ContactRequest> = {
-        let data: Option<String> = redis::cmd("GET")
-            .arg(REDIS_CONTACTS_KEY)
-            .query_async(&mut conn)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        
-        if let Some(json_str) = data {
-            serde_json::from_str(&json_str).unwrap_or_else(|_| vec![])
-        } else {
-            vec![]
-        }
-    };
-    
-    contacts.push(contact.clone());
-    
-    let json_str = serde_json::to_string(&contacts)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_CONTACTS_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Insert contact message into PostgreSQL
+    sqlx::query!(
+        r#"
+        INSERT INTO contact_messages (name, email, message, is_read)
+        VALUES ($1, $2, $3, false)
+        "#,
+        name,
+        email,
+        message
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in contact: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
     Ok(Json(serde_json::json!({
         "success": true,
@@ -583,42 +618,62 @@ async fn health_check() -> Json<HealthCheck> {
 }
 
 async fn get_translations(Extension(state): Extension<AppState>) -> Result<Json<Translations>, StatusCode> {
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // PostgreSQL'den çevirileri al
+    let translations = sqlx::query!(
+        r#"
+        SELECT 
+            locale,
+            translations as "translations!: sqlx::types::Json<serde_json::Value>"
+        FROM translations
+        "#
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in get_translations: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_TRANSLATIONS_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut tr_data = serde_json::json!({});
+    let mut en_data = serde_json::json!({});
     
-    if let Some(json_str) = data {
-        let translations: Translations = serde_json::from_str(&json_str)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(Json(translations))
-    } else {
-        // Return empty translations if not set
-        Ok(Json(Translations {
-            tr: serde_json::json!({}),
-            en: serde_json::json!({}),
-        }))
+    for row in translations {
+        if row.locale == "tr" {
+            tr_data = row.translations.0;
+        } else if row.locale == "en" {
+            en_data = row.translations.0;
+        }
     }
+    
+    Ok(Json(Translations {
+        tr: tr_data,
+        en: en_data,
+    }))
 }
 
 async fn get_footer(Extension(state): Extension<AppState>) -> Result<Json<Footer>, StatusCode> {
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let footer = sqlx::query!(
+        r#"
+        SELECT text_tr, text_en, enabled, show_backend
+        FROM footer_settings
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in get_footer: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_FOOTER_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    if let Some(json_str) = data {
-        let footer: Footer = serde_json::from_str(&json_str)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(Json(footer))
+    if let Some(row) = footer {
+        Ok(Json(Footer {
+            text_tr: row.text_tr,
+            text_en: row.text_en,
+            enabled: row.enabled.unwrap_or(true),
+            show_backend: row.show_backend.unwrap_or(false),
+        }))
     } else {
-        // Return default footer if not set
         Ok(Json(Footer {
             text_tr: "© 2025 Ertu. Rust ile geliştirildi.".to_string(),
             text_en: "© 2025 Ertu. Built with Rust.".to_string(),
@@ -629,114 +684,142 @@ async fn get_footer(Extension(state): Extension<AppState>) -> Result<Json<Footer
 }
 
 async fn get_features(Extension(state): Extension<AppState>) -> Result<Json<Features>, StatusCode> {
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let features = sqlx::query!(
+        r#"
+        SELECT 
+            performance_tr as "performance_tr!: sqlx::types::Json<Feature>",
+            performance_en as "performance_en!: sqlx::types::Json<Feature>",
+            scalable_tr as "scalable_tr!: sqlx::types::Json<Feature>",
+            scalable_en as "scalable_en!: sqlx::types::Json<Feature>",
+            secure_tr as "secure_tr!: sqlx::types::Json<Feature>",
+            secure_en as "secure_en!: sqlx::types::Json<Feature>"
+        FROM features_settings
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in get_features: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_FEATURES_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    if let Some(json_str) = data {
-        let features: Features = serde_json::from_str(&json_str)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(Json(features))
+    if let Some(row) = features {
+        Ok(Json(Features {
+            performance_tr: row.performance_tr.0,
+            performance_en: row.performance_en.0,
+            scalable_tr: row.scalable_tr.0,
+            scalable_en: row.scalable_en.0,
+            secure_tr: row.secure_tr.0,
+            secure_en: row.secure_en.0,
+        }))
     } else {
-        // Return default features if not set
         Ok(Json(Features {
             performance_tr: Feature {
                 title: "Yüksek Performans".to_string(),
-                description: "Rust ile geliştirilmiş, hızlı ve verimli backend sistemleri".to_string(),
+                description: "Rust ile geliştirilmiş, hızlı backend".to_string(),
             },
             performance_en: Feature {
                 title: "High Performance".to_string(),
-                description: "Fast and efficient backend systems developed with Rust".to_string(),
+                description: "Fast backend developed with Rust".to_string(),
             },
             scalable_tr: Feature {
-                title: "Yatay ölçeklenebilir".to_string(),
-                description: "Load balancer ve mikroservis mimarisi ile ölçeklenebilir çözümler".to_string(),
+                title: "Ölçeklenebilir".to_string(),
+                description: "Load balancer ile ölçeklenebilir".to_string(),
             },
             scalable_en: Feature {
-                title: "Horizontally Scalable".to_string(),
-                description: "Scalable solutions with load balancer and microservice architecture".to_string(),
+                title: "Scalable".to_string(),
+                description: "Scalable with load balancer".to_string(),
             },
             secure_tr: Feature {
                 title: "Güvenli".to_string(),
-                description: "Modern güvenlik standartları ile korumalı sistemler".to_string(),
+                description: "Modern güvenlik standartları".to_string(),
             },
             secure_en: Feature {
                 title: "Secure".to_string(),
-                description: "Systems protected with modern security standards".to_string(),
+                description: "Modern security standards".to_string(),
             },
         }))
     }
 }
 
 async fn get_hero(Extension(state): Extension<AppState>) -> Result<Json<HeroSection>, StatusCode> {
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let hero = sqlx::query!(
+        r#"
+        SELECT greeting_tr, greeting_en, name, title_tr, title_en
+        FROM hero_section
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in get_hero: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_HERO_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    if let Some(json_str) = data {
-        let hero: HeroSection = serde_json::from_str(&json_str)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(Json(hero))
+    if let Some(row) = hero {
+        Ok(Json(HeroSection {
+            greeting_tr: row.greeting_tr,
+            greeting_en: row.greeting_en,
+            name: row.name,
+            title_tr: row.title_tr,
+            title_en: row.title_en,
+        }))
     } else {
         Ok(Json(HeroSection {
-            greeting_tr: "Merhaba, Ben".to_string(),
-            greeting_en: "Hello, I'm".to_string(),
+            greeting_tr: "Merhaba, ben".to_string(),
+            greeting_en: "Hi, I'm".to_string(),
             name: "Ertu".to_string(),
-            title_tr: "Rust Backend Developer - Yüksek Performanslı Sistemler Geliştiriyorum".to_string(),
-            title_en: "Rust Backend Developer - Building High-Performance Systems".to_string(),
+            title_tr: "Rust Backend Developer | Yüksek Performanslı Sistemler".to_string(),
+            title_en: "Rust Backend Developer | High Performance Systems".to_string(),
         }))
     }
 }
 
 // Helper: Get admin password hash from Redis or default
 async fn get_admin_password_hash(state: &AppState) -> Result<String, StatusCode> {
-    let mut conn = get_redis_conn(state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let hash_row = sqlx::query!(
+        r#"
+        SELECT password_hash
+        FROM admin_users
+        WHERE username = 'admin'
+        LIMIT 1
+        "#
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in get_admin_password_hash: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let hash: Option<String> = redis::cmd("GET")
-        .arg(REDIS_ADMIN_PASSWORD_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // If no hash in Redis, use default and also store it in Redis for consistency
-    let final_hash = hash.unwrap_or_else(|| {
-        let default = DEFAULT_ADMIN_PASSWORD_HASH.to_string();
-        // Store default in Redis asynchronously (fire and forget)
-        let state_clone = state.clone();
-        let default_clone = default.clone();
-        tokio::spawn(async move {
-            if let Ok(mut conn) = get_redis_conn(&state_clone).await {
-                let _ = redis::cmd("SET")
-                    .arg(REDIS_ADMIN_PASSWORD_KEY)
-                    .arg(&default_clone)
-                    .query_async::<_, ()>(&mut conn)
-                    .await;
-            }
-        });
-        default
-    });
-    
-    Ok(final_hash)
+    if let Some(row) = hash_row {
+        Ok(row.password_hash)
+    } else {
+        // No admin user yet, return default hash
+        // The default admin user should have been created in migration
+        Ok(DEFAULT_ADMIN_PASSWORD_HASH.to_string())
+    }
 }
 
-// Helper: Set admin password hash to Redis
+// Helper: Set admin password hash to PostgreSQL
 async fn set_admin_password_hash(state: &AppState, hash: &str) -> Result<(), StatusCode> {
-    let mut conn = get_redis_conn(state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_ADMIN_PASSWORD_KEY)
-        .arg(hash)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query!(
+        r#"
+        UPDATE admin_users
+        SET password_hash = $1,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE username = 'admin'
+        "#,
+        hash
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in set_admin_password_hash: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
     Ok(())
 }
@@ -831,37 +914,35 @@ async fn admin_create_portfolio(
 ) -> Result<Json<PortfolioItem>, StatusCode> {
     require_admin(session).await?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let id = sqlx::query!(
+        r#"
+        INSERT INTO portfolio_items (
+            title, description, technologies, image_url,
+            github_url, live_url, huggingface_url, display_order
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id::text
+        "#,
+        item.title,
+        item.description,
+        sqlx::types::Json(item.technologies) as _,
+        item.image_url,
+        item.github_url,
+        item.live_url,
+        item.huggingface_url,
+        item.order.unwrap_or(0)
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_create_portfolio: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let mut items: Vec<PortfolioItem> = {
-        let data: Option<String> = redis::cmd("GET")
-            .arg(REDIS_PORTFOLIO_KEY)
-            .query_async(&mut conn)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        
-        if let Some(json_str) = data {
-            serde_json::from_str(&json_str).unwrap_or_else(|_| vec![])
-        } else {
-            vec![]
-        }
-    };
-    
-    let mut new_item = item;
-    new_item.id = Uuid::new_v4().to_string();
-    items.push(new_item.clone());
-    
-    let json_str = serde_json::to_string(&items)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_PORTFOLIO_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    Ok(Json(new_item))
+    Ok(Json(PortfolioItem {
+        id: id.id,
+        ..item
+    }))
 }
 
 async fn admin_update_portfolio(
@@ -871,37 +952,40 @@ async fn admin_update_portfolio(
 ) -> Result<Json<PortfolioItem>, StatusCode> {
     require_admin(session).await?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = sqlx::query!(
+        r#"
+        UPDATE portfolio_items
+        SET title = $2,
+            description = $3,
+            technologies = $4,
+            image_url = $5,
+            github_url = $6,
+            live_url = $7,
+            huggingface_url = $8,
+            display_order = $9,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1::uuid
+        "#,
+        uuid::Uuid::parse_str(&item.id).map_err(|_| StatusCode::BAD_REQUEST)?,
+        item.title,
+        item.description,
+        sqlx::types::Json(item.technologies.clone()) as _,
+        item.image_url,
+        item.github_url,
+        item.live_url,
+        item.huggingface_url,
+        item.order.unwrap_or(0)
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_update_portfolio: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let mut items: Vec<PortfolioItem> = {
-        let data: Option<String> = redis::cmd("GET")
-            .arg(REDIS_PORTFOLIO_KEY)
-            .query_async(&mut conn)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        
-        if let Some(json_str) = data {
-            serde_json::from_str(&json_str).unwrap_or_else(|_| vec![])
-        } else {
-            vec![]
-        }
-    };
-    
-    if let Some(pos) = items.iter().position(|p| p.id == item.id) {
-        items[pos] = item.clone();
-    } else {
+    if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);
     }
-    
-    let json_str = serde_json::to_string(&items)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_PORTFOLIO_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     Ok(Json(item))
 }
@@ -915,33 +999,23 @@ async fn admin_delete_portfolio(
     
     let id = params.get("id").ok_or(StatusCode::BAD_REQUEST)?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = sqlx::query!(
+        r#"
+        DELETE FROM portfolio_items
+        WHERE id = $1::uuid
+        "#,
+        uuid::Uuid::parse_str(id).map_err(|_| StatusCode::BAD_REQUEST)?
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_delete_portfolio: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let mut items: Vec<PortfolioItem> = {
-        let data: Option<String> = redis::cmd("GET")
-            .arg(REDIS_PORTFOLIO_KEY)
-            .query_async(&mut conn)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        
-        if let Some(json_str) = data {
-            serde_json::from_str(&json_str).unwrap_or_else(|_| vec![])
-        } else {
-            vec![]
-        }
-    };
-    
-    items.retain(|p| &p.id != id);
-    
-    let json_str = serde_json::to_string(&items)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_PORTFOLIO_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
     
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -1079,32 +1153,23 @@ async fn admin_delete_contact(
     
     let id = params.get("id").ok_or(StatusCode::BAD_REQUEST)?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result = sqlx::query!(
+        r#"
+        DELETE FROM contact_messages
+        WHERE id = $1::uuid
+        "#,
+        uuid::Uuid::parse_str(id).map_err(|_| StatusCode::BAD_REQUEST)?
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_delete_contact: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_CONTACTS_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let mut contacts: Vec<ContactRequest> = if let Some(json_str) = data {
-        serde_json::from_str(&json_str).unwrap_or_else(|_| vec![])
-    } else {
-        vec![]
-    };
-    
-    // Remove the contact
-    contacts.retain(|c| &c.id != id);
-    
-    let json_str = serde_json::to_string(&contacts)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_CONTACTS_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if result.rows_affected() == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
     
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -1197,23 +1262,22 @@ async fn admin_reply_contact(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     require_admin(session).await?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // Get contact info
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_CONTACTS_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let contacts: Vec<ContactRequest> = if let Some(json_str) = data {
-        serde_json::from_str(&json_str).unwrap_or_else(|_| vec![])
-    } else {
-        vec![]
-    };
-    
-    let contact = contacts.iter().find(|c| c.id == payload.contact_id)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    // Get contact info from PostgreSQL
+    let contact = sqlx::query!(
+        r#"
+        SELECT id::text, name, email, message
+        FROM contact_messages
+        WHERE id = $1::uuid
+        "#,
+        uuid::Uuid::parse_str(&payload.contact_id).map_err(|_| StatusCode::BAD_REQUEST)?
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_reply_contact: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .ok_or(StatusCode::NOT_FOUND)?;
     
     // Email configuration from env
     let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "mailserver".to_string());
@@ -1463,26 +1527,7 @@ async fn admin_get_translations(
     Extension(state): Extension<AppState>,
 ) -> Result<Json<Translations>, StatusCode> {
     require_admin(session).await?;
-    
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_TRANSLATIONS_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    if let Some(json_str) = data {
-        let translations: Translations = serde_json::from_str(&json_str)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        Ok(Json(translations))
-    } else {
-        // Default translations (frontend'den alınacak)
-        Ok(Json(Translations {
-            tr: serde_json::json!({}),
-            en: serde_json::json!({}),
-        }))
-    }
+    get_translations(Extension(state)).await
 }
 
 async fn admin_update_translations(
@@ -1492,17 +1537,41 @@ async fn admin_update_translations(
 ) -> Result<Json<Translations>, StatusCode> {
     require_admin(session).await?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Update or insert TR
+    sqlx::query!(
+        r#"
+        INSERT INTO translations (locale, translations)
+        VALUES ('tr', $1)
+        ON CONFLICT (locale) DO UPDATE
+        SET translations = EXCLUDED.translations,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+        sqlx::types::Json(&translations.tr) as _
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error updating TR translations: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let json_str = serde_json::to_string(&translations)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_TRANSLATIONS_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Update or insert EN
+    sqlx::query!(
+        r#"
+        INSERT INTO translations (locale, translations)
+        VALUES ('en', $1)
+        ON CONFLICT (locale) DO UPDATE
+        SET translations = EXCLUDED.translations,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+        sqlx::types::Json(&translations.en) as _
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error updating EN translations: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
     Ok(Json(translations))
 }
@@ -1522,17 +1591,26 @@ async fn admin_update_footer(
 ) -> Result<Json<Footer>, StatusCode> {
     require_admin(session).await?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let json_str = serde_json::to_string(&footer)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_FOOTER_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query!(
+        r#"
+        UPDATE footer_settings
+        SET text_tr = $1,
+            text_en = $2,
+            enabled = $3,
+            show_backend = $4,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+        footer.text_tr,
+        footer.text_en,
+        footer.enabled,
+        footer.show_backend
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_update_footer: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
     Ok(Json(footer))
 }
@@ -1560,17 +1638,30 @@ async fn admin_update_features(
 ) -> Result<Json<Features>, StatusCode> {
     require_admin(session).await?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let json_str = serde_json::to_string(&features)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_FEATURES_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query!(
+        r#"
+        UPDATE features_settings
+        SET performance_tr = $1,
+            performance_en = $2,
+            scalable_tr = $3,
+            scalable_en = $4,
+            secure_tr = $5,
+            secure_en = $6,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+        sqlx::types::Json(&features.performance_tr) as _,
+        sqlx::types::Json(&features.performance_en) as _,
+        sqlx::types::Json(&features.scalable_tr) as _,
+        sqlx::types::Json(&features.scalable_en) as _,
+        sqlx::types::Json(&features.secure_tr) as _,
+        sqlx::types::Json(&features.secure_en) as _
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_update_features: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
     Ok(Json(features))
 }
@@ -1582,17 +1673,28 @@ async fn admin_update_hero(
 ) -> Result<Json<HeroSection>, StatusCode> {
     require_admin(session).await?;
     
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let json_str = serde_json::to_string(&hero)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    redis::cmd("SET")
-        .arg(REDIS_HERO_KEY)
-        .arg(&json_str)
-        .query_async::<_, ()>(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    sqlx::query!(
+        r#"
+        UPDATE hero_section
+        SET greeting_tr = $1,
+            greeting_en = $2,
+            name = $3,
+            title_tr = $4,
+            title_en = $5,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+        hero.greeting_tr,
+        hero.greeting_en,
+        hero.name,
+        hero.title_tr,
+        hero.title_en
+    )
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_update_hero: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
     Ok(Json(hero))
 }
@@ -1627,51 +1729,24 @@ async fn log_visitor(
         response.headers_mut().insert("X-Backend-Server", value);
     }
 
-    // Log to Redis (fire and forget)
+    // Log to PostgreSQL (fire and forget)
     let ip = addr.ip().to_string();
-    let timestamp = chrono::Utc::now().to_rfc3339();
+    let pool = state.db_pool.clone();
     
     tokio::spawn(async move {
-        if let Ok(mut conn) = get_redis_conn(&state).await {
-            let log = VisitorLog {
-                id: uuid::Uuid::new_v4().to_string(),
-                ip,
-                user_agent,
-                path,
-                method,
-                timestamp,
-                referer,
-            };
-
-            // Get existing logs
-            let data: Option<String> = redis::cmd("GET")
-                .arg(REDIS_VISITOR_LOGS_KEY)
-                .query_async(&mut conn)
-                .await
-                .ok()
-                .flatten();
-
-            let mut logs: Vec<VisitorLog> = data
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_else(|| vec![]);
-
-            // Add new log
-            logs.push(log);
-
-            // Keep only last 500 logs
-            if logs.len() > 500 {
-                logs.drain(0..logs.len() - 500);
-            }
-
-            // Save back to Redis
-            if let Ok(json_str) = serde_json::to_string(&logs) {
-                let _: Result<(), _> = redis::cmd("SET")
-                    .arg(REDIS_VISITOR_LOGS_KEY)
-                    .arg(&json_str)
-                    .query_async(&mut conn)
-                    .await;
-            }
-        }
+        let _ = sqlx::query!(
+            r#"
+            INSERT INTO visitor_logs (ip, user_agent, path, method, referer)
+            VALUES ($1, $2, $3, $4, $5)
+            "#,
+            ip,
+            user_agent,
+            path,
+            method,
+            referer
+        )
+        .execute(&pool)
+        .await;
     });
 
     response
@@ -1744,30 +1819,52 @@ async fn main() -> Result<()> {
     
     let session_store = session_store.ok_or_else(|| anyhow::anyhow!("Redis session store oluşturulamadı"))?;
 
+    // PostgreSQL connection
+    let database_url = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgresql://portfolio_user:portfolio_secure_pass_2025@postgres:5432/portfolio_db".to_string());
+    
+    tracing::info!("🔗 PostgreSQL'e bağlanılıyor...");
+    
+    let db_pool = PgPoolOptions::new()
+        .max_connections(20)
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .connect(&database_url)
+        .await
+        .map_err(|e| {
+            tracing::error!("❌ PostgreSQL bağlantı hatası: {}", e);
+            anyhow::anyhow!("PostgreSQL bağlantısı kurulamadı: {}", e)
+        })?;
+    
+    tracing::info!("✅ PostgreSQL bağlantısı başarılı");
+
     let app_state = AppState {
+        db_pool: db_pool.clone(),
         redis_client: redis_client.clone(),
     };
 
-    // İlk çalıştırmada admin şifresi yoksa oluştur
-    {
-        let mut conn = app_state.redis_client.get_multiplexed_async_connection().await?;
-        let existing_hash: Option<String> = redis::cmd("GET")
-            .arg(REDIS_ADMIN_PASSWORD_KEY)
-            .query_async(&mut conn)
-            .await?;
+    // Database'de admin kullanıcısının olduğunu kontrol et
+    // Migration dosyası zaten default admin user oluşturdu olmalı
+    tracing::info!("🔐 Admin kullanıcısı kontrol ediliyor...");
+    let admin_exists = sqlx::query!("SELECT COUNT(*) as count FROM admin_users WHERE username = 'admin'")
+        .fetch_one(&db_pool)
+        .await?;
+    
+    if admin_exists.count.unwrap_or(0) == 0 {
+        tracing::warn!("⚠️ Admin kullanıcısı bulunamadı, oluşturuluyor...");
+        let default_password = "admin123";
+        let hash = bcrypt::hash(default_password, bcrypt::DEFAULT_COST)
+            .map_err(|e| anyhow::anyhow!("Bcrypt hash error: {}", e))?;
         
-        if existing_hash.is_none() {
-            tracing::info!("🔐 Admin şifresi bulunamadı, yeni şifre oluşturuluyor...");
-            let default_password = "admin123";
-            let hash = bcrypt::hash(default_password, bcrypt::DEFAULT_COST)
-                .map_err(|e| anyhow::anyhow!("Bcrypt hash error: {}", e))?;
-            redis::cmd("SET")
-                .arg(REDIS_ADMIN_PASSWORD_KEY)
-                .arg(&hash)
-                .query_async::<_, ()>(&mut conn)
-                .await?;
-            tracing::info!("✅ Admin şifresi oluşturuldu: {}", default_password);
-        }
+        sqlx::query!(
+            "INSERT INTO admin_users (username, password_hash) VALUES ('admin', $1)",
+            hash
+        )
+        .execute(&db_pool)
+        .await?;
+        
+        tracing::info!("✅ Admin kullanıcısı oluşturuldu (username: admin, password: {})", default_password);
+    } else {
+        tracing::info!("✅ Admin kullanıcısı mevcut");
     }
 
     // Session Layer: 1 saat geçerli
@@ -1863,31 +1960,45 @@ async fn admin_get_logs(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let logs = sqlx::query!(
+        r#"
+        SELECT 
+            id::text,
+            ip,
+            user_agent,
+            path,
+            method,
+            referer,
+            created_at::text as timestamp
+        FROM visitor_logs
+        ORDER BY created_at DESC
+        LIMIT 100
+        "#
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        eprintln!("Database error in admin_get_logs: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     
-    let data: Option<String> = redis::cmd("GET")
-        .arg(REDIS_VISITOR_LOGS_KEY)
-        .query_async(&mut conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result: Vec<VisitorLog> = logs
+        .into_iter()
+        .map(|row| VisitorLog {
+            id: row.id,
+            ip: row.ip,
+            user_agent: row.user_agent,
+            path: row.path,
+            method: row.method,
+            timestamp: row.timestamp.unwrap_or_default(),
+            referer: row.referer,
+        })
+        .collect();
     
-    if let Some(json_str) = data {
-        let mut logs: Vec<VisitorLog> = serde_json::from_str(&json_str)
-            .unwrap_or_else(|_| vec![]);
-        
-        // Sort by timestamp, newest first
-        logs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        
-        // Return last 100 logs
-        logs.truncate(100);
-        
-        Ok(Json(logs))
-    } else {
-        Ok(Json(vec![]))
-    }
+    Ok(Json(result))
 }
 
-// List backups
+// List backups - filesystem based
 async fn admin_list_backups(
     session: ReadableSession,
 ) -> Result<Json<Vec<BackupInfo>>, StatusCode> {
@@ -1900,39 +2011,18 @@ async fn admin_list_backups(
 
     let backup_dir = "/data/backups";
     
-    // Create backup directory if not exists
     if let Err(_) = fs::create_dir_all(backup_dir) {
         return Ok(Json(vec![]));
     }
 
     let mut backups = vec![];
     
-    tracing::info!("🔍 Listing backups from: {}", backup_dir);
-    
     if let Ok(entries) = fs::read_dir(backup_dir) {
         for entry in entries.flatten() {
-            tracing::info!("📁 Found entry: {:?}", entry.path());
             if let Ok(metadata) = entry.metadata() {
-                tracing::info!("  - Is file: {}", metadata.is_file());
                 if metadata.is_file() {
                     if let Some(filename) = entry.file_name().to_str() {
-                        tracing::info!("  - Filename: {}", filename);
-                        if filename.ends_with(".json") {
-                            tracing::info!("  - ✅ Valid JSON backup: {}", filename);
-                            
-                            // Detect backup type by reading file
-                            let backup_type = if let Ok(content) = fs::read_to_string(entry.path()) {
-                                if content.contains("\"postgres_data\"") && content.contains("\"redis_data\"") {
-                                    "full".to_string()
-                                } else if content.contains("\"portfolio_items\"") {
-                                    "postgresql".to_string()
-                                } else {
-                                    "redis".to_string()
-                                }
-                            } else {
-                                "unknown".to_string()
-                            };
-                            
+                        if filename.ends_with(".sql") || filename.ends_with(".json") {
                             let created_at = metadata.modified()
                                 .ok()
                                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1945,7 +2035,6 @@ async fn admin_list_backups(
                                 filename: filename.to_string(),
                                 size: metadata.len(),
                                 created_at,
-                                backup_type,
                             });
                         }
                     }
@@ -1953,16 +2042,12 @@ async fn admin_list_backups(
             }
         }
     }
-    
-    tracing::info!("📊 Total backups found: {}", backups.len());
 
-    // Sort by created_at, newest first
     backups.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
     Ok(Json(backups))
 }
-
-// Create backup (BOTH Redis Sessions + PostgreSQL Data)
+// Create backup - SQL based (without external tools)
 async fn admin_create_backup(
     session: ReadableSession,
     Extension(state): Extension<AppState>,
@@ -1974,191 +2059,138 @@ async fn admin_create_backup(
     use std::fs;
     use std::path::Path;
 
-    tracing::info!("🔄 Starting FULL backup (Redis + PostgreSQL)...");
-
     let backup_dir = "/data/backups";
     fs::create_dir_all(backup_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let backup_filename = format!("backup_{}.json", timestamp);
+    let backup_filename = format!("backup_{}.sql", timestamp);
     let backup_path = Path::new(backup_dir).join(&backup_filename);
 
-    // 1. Export Redis sessions (NOT data, only sessions!)
-    let mut redis_conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // Create SQL backup with all data
+    let mut backup_sql = String::from("-- Portfolio Database Backup\n");
+    backup_sql.push_str(&format!("-- Generated: {}\n\n", chrono::Utc::now().to_rfc3339()));
     
-    let keys: Vec<String> = redis::cmd("KEYS")
-        .arg("axum.sid:*") // Only backup session keys
-        .query_async(&mut redis_conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let mut redis_data = serde_json::Map::new();
-    
-    for key in keys {
-        let value: Option<String> = redis::cmd("GET")
-            .arg(&key)
-            .query_async(&mut redis_conn)
-            .await
-            .ok()
-            .flatten();
-        
-        if let Some(v) = value {
-            redis_data.insert(key, serde_json::Value::String(v));
-        }
-    }
-
-    tracing::info!("✅ Redis sessions backed up: {} keys", redis_data.len());
-
-    // 2. Export ALL PostgreSQL data
-    let db_url = env::var("DATABASE_URL").unwrap_or_else(|_| 
-        "postgres://portfolio_user:portfolio_pass@postgres:5432/portfolio_db".to_string()
-    );
-    
-    let pool = sqlx::PgPool::connect(&db_url)
+    // Backup hero section
+    let heroes = sqlx::query("SELECT * FROM hero_section")
+        .fetch_all(&state.db_pool)
         .await
         .map_err(|e| {
-            tracing::error!("❌ PostgreSQL connection failed: {}", e);
+            eprintln!("Backup error (hero): {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    if !heroes.is_empty() {
+        backup_sql.push_str("-- Hero Section\n");
+        backup_sql.push_str("TRUNCATE hero_section CASCADE;\n");
+        for row in heroes {
+            let greeting_tr: String = row.get("greeting_tr").unwrap_or_default();
+            let greeting_en: String = row.get("greeting_en").unwrap_or_default();
+            let name: String = row.get("name").unwrap_or_default();
+            let title_tr: String = row.get("title_tr").unwrap_or_default();
+            let title_en: String = row.get("title_en").unwrap_or_default();
+            
+            backup_sql.push_str(&format!(
+                "INSERT INTO hero_section (greeting_tr, greeting_en, name, title_tr, title_en) VALUES ('{}', '{}', '{}', '{}', '{}');\n",
+                greeting_tr.replace("'", "''"),
+                greeting_en.replace("'", "''"),
+                name.replace("'", "''"),
+                title_tr.replace("'", "''"),
+                title_en.replace("'", "''")
+            ));
+        }
+        backup_sql.push_str("\n");
+    }
+    
+    // Backup portfolio items
+    let portfolio_items = sqlx::query("SELECT * FROM portfolio_items ORDER BY display_order")
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(|e| {
+            eprintln!("Backup error (portfolio): {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    if !portfolio_items.is_empty() {
+        backup_sql.push_str("-- Portfolio Items\n");
+        backup_sql.push_str("TRUNCATE portfolio_items CASCADE;\n");
+        for row in portfolio_items {
+            let id: uuid::Uuid = row.get("id").unwrap_or_else(|_| uuid::Uuid::new_v4());
+            let title: String = row.get("title").unwrap_or_default();
+            let description: String = row.get("description").unwrap_or_default();
+            let image_url: String = row.get("image_url").unwrap_or_default();
+            let project_url: Option<String> = row.get("project_url").ok().flatten();
+            let technologies: Vec<String> = row.get("technologies").unwrap_or_default();
+            let display_order: i32 = row.get("display_order").unwrap_or(0);
+            
+            backup_sql.push_str(&format!(
+                "INSERT INTO portfolio_items (id, title, description, image_url, project_url, technologies, display_order) VALUES ('{}', '{}', '{}', '{}', {}, ARRAY[{}], {});\n",
+                id,
+                title.replace("'", "''"),
+                description.replace("'", "''"),
+                image_url.replace("'", "''"),
+                project_url.map(|u| format!("'{}'", u.replace("'", "''"))).unwrap_or_else(|| "NULL".to_string()),
+                technologies.iter().map(|t| format!("'{}'", t.replace("'", "''"))).collect::<Vec<_>>().join(", "),
+                display_order
+            ));
+        }
+        backup_sql.push_str("\n");
+    }
+
+    // Backup about info
+    let about_rows = sqlx::query("SELECT * FROM about_info")
+        .fetch_all(&state.db_pool)
+        .await
+        .map_err(|e| {
+            eprintln!("Backup error (about): {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    if !about_rows.is_empty() {
+        backup_sql.push_str("-- About Info\n");
+        backup_sql.push_str("TRUNCATE about_info CASCADE;\n");
+        for row in about_rows {
+            let title_tr: String = row.get("title_tr").unwrap_or_default();
+            let title_en: String = row.get("title_en").unwrap_or_default();
+            let description_tr: String = row.get("description_tr").unwrap_or_default();
+            let description_en: String = row.get("description_en").unwrap_or_default();
+            let image_url: String = row.get("image_url").unwrap_or_default();
+            let cv_url: Option<String> = row.get("cv_url").ok().flatten();
+            
+            backup_sql.push_str(&format!(
+                "INSERT INTO about_info (title_tr, title_en, description_tr, description_en, image_url, cv_url) VALUES ('{}', '{}', '{}', '{}', '{}', {});\n",
+                title_tr.replace("'", "''"),
+                title_en.replace("'", "''"),
+                description_tr.replace("'", "''"),
+                description_en.replace("'", "''"),
+                image_url.replace("'", "''"),
+                cv_url.map(|u| format!("'{}'", u.replace("'", "''"))).unwrap_or_else(|| "NULL".to_string())
+            ));
+        }
+        backup_sql.push_str("\n");
+    }
+
+    // Write backup file
+    fs::write(&backup_path, backup_sql.as_bytes())
+        .map_err(|e| {
+            eprintln!("Failed to write backup: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    // Export all tables
-    let portfolio_items: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(portfolio_items.*) FROM portfolio_items ORDER BY display_order"
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("❌ Failed to export portfolio_items: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?
-    .into_iter()
-    .map(|(json,)| json)
-    .collect();
+    let file_size = fs::metadata(&backup_path)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
 
-    let about_info: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(about_info.*) FROM about_info LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let resume_data: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(resume_data.*) FROM resume_data LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let contact_messages: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(contact_messages.*) FROM contact_messages ORDER BY created_at DESC"
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .into_iter()
-    .map(|(json,)| json)
-    .collect();
-
-    let translations: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(translations.*) FROM translations LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let footer_settings: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(footer_settings.*) FROM footer_settings LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let features: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(features.*) FROM features LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let hero_section: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(hero_section.*) FROM hero_section LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let admin_users: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(admin_users.*) FROM admin_users"
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .into_iter()
-    .map(|(json,)| json)
-    .collect();
-
-    let visitor_logs: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(visitor_logs.*) FROM visitor_logs ORDER BY created_at DESC LIMIT 1000"
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .into_iter()
-    .map(|(json,)| json)
-    .collect();
-
-    pool.close().await;
-
-    tracing::info!("✅ PostgreSQL data exported:");
-    tracing::info!("  - Portfolio Items: {}", portfolio_items.len());
-    tracing::info!("  - Contact Messages: {}", contact_messages.len());
-    tracing::info!("  - Admin Users: {}", admin_users.len());
-    tracing::info!("  - Visitor Logs: {}", visitor_logs.len());
-
-    // 3. Create full backup structure
-    let full_backup = FullBackup {
-        redis_data,
-        postgres_data: PostgresBackupData {
-            portfolio_items,
-            about_info,
-            resume_data,
-            contact_messages,
-            translations,
-            footer_settings,
-            features,
-            hero_section,
-            admin_users,
-            visitor_logs,
-        },
-        metadata: BackupMetadata {
-            created_at: chrono::Utc::now().to_rfc3339(),
-            version: "1.0".to_string(),
-            backup_type: "full".to_string(),
-        },
-    };
-
-    let json_str = serde_json::to_string_pretty(&full_backup)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    fs::write(&backup_path, json_str)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    tracing::info!("✅ Full backup created: {}", backup_filename);
+    tracing::info!("✅ Backup created: {} ({} bytes)", backup_filename, file_size);
 
     Ok(Json(serde_json::json!({
         "success": true,
         "filename": backup_filename,
-        "type": "full"
+        "size": file_size,
+        "message": "Yedek başarıyla oluşturuldu"
     })))
 }
 
-// Restore backup (BOTH Redis Sessions + PostgreSQL Data)
+// Restore backup - SQL based
 async fn admin_restore_backup(
     session: ReadableSession,
     Extension(state): Extension<AppState>,
@@ -2176,212 +2208,61 @@ async fn admin_restore_backup(
         .and_then(|v| v.as_str())
         .ok_or(StatusCode::BAD_REQUEST)?;
 
-    tracing::info!("🔄 Restoring FULL backup: {}", filename);
-
     let backup_dir = "/data/backups";
     let backup_path = Path::new(backup_dir).join(filename);
 
     if !backup_path.exists() {
-        tracing::error!("❌ Backup file not found: {:?}", backup_path);
+        tracing::error!("❌ Backup file not found: {}", filename);
         return Err(StatusCode::NOT_FOUND);
     }
 
-    tracing::info!("📂 Reading backup file...");
-    let json_str = fs::read_to_string(&backup_path)
+    tracing::info!("🔄 Restoring backup: {}", filename);
+
+    // Read backup SQL
+    let backup_sql = fs::read_to_string(&backup_path)
         .map_err(|e| {
-            tracing::error!("❌ Failed to read backup file: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    
-    tracing::info!("🔍 Parsing backup ({} bytes)...", json_str.len());
-    let full_backup: FullBackup = serde_json::from_str(&json_str)
-        .map_err(|e| {
-            tracing::error!("❌ Failed to parse backup: {}", e);
+            eprintln!("Failed to read backup: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    // 1. Restore Redis sessions
-    tracing::info!("🗑️ Flushing Redis sessions...");
-    let mut redis_conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // Delete only session keys
-    let session_keys: Vec<String> = redis::cmd("KEYS")
-        .arg("axum.sid:*")
-        .query_async(&mut redis_conn)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    for key in session_keys {
-        let _: () = redis::cmd("DEL")
-            .arg(&key)
-            .query_async(&mut redis_conn)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    // Execute SQL statements line by line
+    let mut transaction = state.db_pool.begin().await
+        .map_err(|e| {
+            eprintln!("Transaction start failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    tracing::info!("💾 Restoring {} Redis sessions...", full_backup.redis_data.len());
-    let mut restored_redis = 0;
-    for (key, value) in full_backup.redis_data {
-        if let Some(v) = value.as_str() {
-            let _: () = redis::cmd("SET")
-                .arg(&key)
-                .arg(v)
-                .query_async(&mut redis_conn)
+    for line in backup_sql.lines() {
+        let trimmed = line.trim();
+        
+        // Skip comments and empty lines
+        if trimmed.is_empty() || trimmed.starts_with("--") {
+            continue;
+        }
+        
+        // Execute SQL statement
+        if trimmed.ends_with(';') {
+            sqlx::query(trimmed)
+                .execute(&mut *transaction)
                 .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            restored_redis += 1;
+                .map_err(|e| {
+                    eprintln!("SQL execution error: {} - Statement: {}", e, trimmed);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
         }
     }
 
-    tracing::info!("✅ Redis restored: {} sessions", restored_redis);
-
-    // 2. Restore PostgreSQL data
-    let db_url = env::var("DATABASE_URL").unwrap_or_else(|_| 
-        "postgres://portfolio_user:portfolio_pass@postgres:5432/portfolio_db".to_string()
-    );
-    
-    let pool = sqlx::PgPool::connect(&db_url)
-        .await
+    transaction.commit().await
         .map_err(|e| {
-            tracing::error!("❌ PostgreSQL connection failed: {}", e);
+            eprintln!("Transaction commit failed: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    tracing::info!("🗑️ Clearing PostgreSQL tables...");
-    
-    // Clear all tables (except admin_users for safety)
-    sqlx::query("DELETE FROM portfolio_items")
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    sqlx::query("DELETE FROM contact_messages")
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    sqlx::query("DELETE FROM visitor_logs")
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    tracing::info!("💾 Restoring PostgreSQL data...");
-    let pg_data = full_backup.postgres_data;
-    
-    let portfolio_count = pg_data.portfolio_items.len();
-    let contact_count = pg_data.contact_messages.len();
-
-    // Restore portfolio items
-    for item in &pg_data.portfolio_items {
-        sqlx::query(
-            "INSERT INTO portfolio_items (id, title, description, technologies, image_url, github_url, live_url, huggingface_url, display_order, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
-        )
-        .bind(item.get("id").and_then(|v| v.as_str()))
-        .bind(item.get("title").and_then(|v| v.as_str()))
-        .bind(item.get("description").and_then(|v| v.as_str()))
-        .bind(item.get("technologies").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_str()).map(String::from).collect::<Vec<_>>()
-        }))
-        .bind(item.get("image_url").and_then(|v| v.as_str()))
-        .bind(item.get("github_url").and_then(|v| v.as_str()))
-        .bind(item.get("live_url").and_then(|v| v.as_str()))
-        .bind(item.get("huggingface_url").and_then(|v| v.as_str()))
-        .bind(item.get("display_order").or(item.get("order")).and_then(|v| v.as_i64()).map(|n| n as i32))
-        .bind(item.get("created_at").and_then(|v| v.as_str()))
-        .bind(item.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("❌ Failed to restore portfolio item: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    }
-
-    // Restore about_info
-    if let Some(about) = pg_data.about_info {
-        sqlx::query("DELETE FROM about_info").execute(&pool).await.ok();
-        sqlx::query(
-            "INSERT INTO about_info (id, name, title, bio, skills, email, github, linkedin, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
-        )
-        .bind(about.get("id").and_then(|v| v.as_str()))
-        .bind(about.get("name").and_then(|v| v.as_str()))
-        .bind(about.get("title").and_then(|v| v.as_str()))
-        .bind(about.get("bio").and_then(|v| v.as_str()))
-        .bind(about.get("skills").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_str()).map(String::from).collect::<Vec<_>>()
-        }))
-        .bind(about.get("email").and_then(|v| v.as_str()))
-        .bind(about.get("github").and_then(|v| v.as_str()))
-        .bind(about.get("linkedin").and_then(|v| v.as_str()))
-        .bind(about.get("created_at").and_then(|v| v.as_str()))
-        .bind(about.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    // Restore resume_data
-    if let Some(resume) = pg_data.resume_data {
-        sqlx::query("DELETE FROM resume_data").execute(&pool).await.ok();
-        sqlx::query(
-            "INSERT INTO resume_data (id, data, created_at, updated_at) VALUES ($1, $2, $3, $4)"
-        )
-        .bind(resume.get("id").and_then(|v| v.as_str()))
-        .bind(&resume.get("data").unwrap_or(&serde_json::json!({})))
-        .bind(resume.get("created_at").and_then(|v| v.as_str()))
-        .bind(resume.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    // Restore contact_messages
-    for msg in &pg_data.contact_messages {
-        sqlx::query(
-            "INSERT INTO contact_messages (id, name, email, message, created_at) VALUES ($1, $2, $3, $4, $5)"
-        )
-        .bind(msg.get("id").and_then(|v| v.as_str()))
-        .bind(msg.get("name").and_then(|v| v.as_str()))
-        .bind(msg.get("email").and_then(|v| v.as_str()))
-        .bind(msg.get("message").and_then(|v| v.as_str()))
-        .bind(msg.get("created_at").and_then(|v| v.as_str()))
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    // Restore other tables similarly...
-    if let Some(trans) = pg_data.translations {
-        sqlx::query("DELETE FROM translations").execute(&pool).await.ok();
-        sqlx::query("INSERT INTO translations (id, data) VALUES ($1, $2)")
-            .bind(trans.get("id").and_then(|v| v.as_str()))
-            .bind(&trans.get("data").unwrap_or(&serde_json::json!({})))
-            .execute(&pool).await.ok();
-    }
-
-    if let Some(footer) = pg_data.footer_settings {
-        sqlx::query("DELETE FROM footer_settings").execute(&pool).await.ok();
-        sqlx::query("INSERT INTO footer_settings (id, text, show_backend) VALUES ($1, $2, $3)")
-            .bind(footer.get("id").and_then(|v| v.as_str()))
-            .bind(footer.get("text").and_then(|v| v.as_str()))
-            .bind(footer.get("show_backend").and_then(|v| v.as_bool()))
-            .execute(&pool).await.ok();
-    }
-
-    pool.close().await;
-
-    tracing::info!("✅ Restore complete!");
+    tracing::info!("✅ Backup restored successfully: {}", filename);
 
     Ok(Json(serde_json::json!({
         "success": true,
-        "message": "Full backup restored successfully!",
-        "restored": {
-            "redis_sessions": restored_redis,
-            "portfolio_items": portfolio_count,
-            "contact_messages": contact_count
-        }
+        "message": "Yedek başarıyla geri yüklendi"
     })))
 }
 
@@ -2404,7 +2285,7 @@ async fn admin_delete_backup(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    if !filename.ends_with(".json") {
+    if !filename.ends_with(".sql") && !filename.ends_with(".json") {
         return Err(StatusCode::BAD_REQUEST);
     }
 

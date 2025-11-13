@@ -1546,7 +1546,8 @@ Redis"
                         const res = await fetch('/api/admin/backups', { method: 'POST' });
                         if (res.ok) {
                           alert('Yedek oluşturuldu!');
-                          loadData();
+                          // Force reload backup list
+                          window.location.reload();
                         } else {
                           alert('Hata: ' + (await res.text()));
                         }

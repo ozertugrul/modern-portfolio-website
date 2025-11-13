@@ -30,8 +30,3 @@ tokio-postgres = "0.7"
 tokio-stream = "0.1"
 base64 = "0.22"
 regex = "1.10"
-
-# Pin home to avoid edition2024 requirement
-home = "=0.5.9"
-# Pin other edition2024 dependencies
-base64ct = "=1.6.0"

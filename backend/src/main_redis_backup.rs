@@ -210,35 +210,6 @@ struct BackupInfo {
     filename: String,
     size: u64,
     created_at: String,
-    backup_type: String, // "redis" or "postgresql" or "full"
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct FullBackup {
-    redis_data: serde_json::Map<String, serde_json::Value>,
-    postgres_data: PostgresBackupData,
-    metadata: BackupMetadata,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct BackupMetadata {
-    created_at: String,
-    version: String,
-    backup_type: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct PostgresBackupData {
-    portfolio_items: Vec<serde_json::Value>,
-    about_info: Option<serde_json::Value>,
-    resume_data: Option<serde_json::Value>,
-    contact_messages: Vec<serde_json::Value>,
-    translations: Option<serde_json::Value>,
-    footer_settings: Option<serde_json::Value>,
-    features: Option<serde_json::Value>,
-    hero_section: Option<serde_json::Value>,
-    admin_users: Vec<serde_json::Value>,
-    visitor_logs: Vec<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1919,20 +1890,6 @@ async fn admin_list_backups(
                         tracing::info!("  - Filename: {}", filename);
                         if filename.ends_with(".json") {
                             tracing::info!("  - ✅ Valid JSON backup: {}", filename);
-                            
-                            // Detect backup type by reading file
-                            let backup_type = if let Ok(content) = fs::read_to_string(entry.path()) {
-                                if content.contains("\"postgres_data\"") && content.contains("\"redis_data\"") {
-                                    "full".to_string()
-                                } else if content.contains("\"portfolio_items\"") {
-                                    "postgresql".to_string()
-                                } else {
-                                    "redis".to_string()
-                                }
-                            } else {
-                                "unknown".to_string()
-                            };
-                            
                             let created_at = metadata.modified()
                                 .ok()
                                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1945,7 +1902,6 @@ async fn admin_list_backups(
                                 filename: filename.to_string(),
                                 size: metadata.len(),
                                 created_at,
-                                backup_type,
                             });
                         }
                     }
@@ -1962,7 +1918,7 @@ async fn admin_list_backups(
     Ok(Json(backups))
 }
 
-// Create backup (BOTH Redis Sessions + PostgreSQL Data)
+// Create backup
 async fn admin_create_backup(
     session: ReadableSession,
     Extension(state): Extension<AppState>,
@@ -1974,191 +1930,58 @@ async fn admin_create_backup(
     use std::fs;
     use std::path::Path;
 
-    tracing::info!("🔄 Starting FULL backup (Redis + PostgreSQL)...");
-
     let backup_dir = "/data/backups";
     fs::create_dir_all(backup_dir).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // Trigger Redis BGSAVE
+    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Use BGSAVE instead of SAVE to avoid blocking
+    let _: String = redis::cmd("BGSAVE")
+        .query_async(&mut conn)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Create JSON backup instead of copying RDB
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let backup_filename = format!("backup_{}.json", timestamp);
     let backup_path = Path::new(backup_dir).join(&backup_filename);
 
-    // 1. Export Redis sessions (NOT data, only sessions!)
-    let mut redis_conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
+    // Export all Redis data to JSON
     let keys: Vec<String> = redis::cmd("KEYS")
-        .arg("axum.sid:*") // Only backup session keys
-        .query_async(&mut redis_conn)
+        .arg("*")
+        .query_async(&mut conn)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let mut redis_data = serde_json::Map::new();
+    let mut backup_data = serde_json::Map::new();
     
     for key in keys {
         let value: Option<String> = redis::cmd("GET")
             .arg(&key)
-            .query_async(&mut redis_conn)
+            .query_async(&mut conn)
             .await
             .ok()
             .flatten();
         
         if let Some(v) = value {
-            redis_data.insert(key, serde_json::Value::String(v));
+            backup_data.insert(key, serde_json::Value::String(v));
         }
     }
 
-    tracing::info!("✅ Redis sessions backed up: {} keys", redis_data.len());
-
-    // 2. Export ALL PostgreSQL data
-    let db_url = env::var("DATABASE_URL").unwrap_or_else(|_| 
-        "postgres://portfolio_user:portfolio_pass@postgres:5432/portfolio_db".to_string()
-    );
-    
-    let pool = sqlx::PgPool::connect(&db_url)
-        .await
-        .map_err(|e| {
-            tracing::error!("❌ PostgreSQL connection failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    // Export all tables
-    let portfolio_items: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(portfolio_items.*) FROM portfolio_items ORDER BY display_order"
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("❌ Failed to export portfolio_items: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?
-    .into_iter()
-    .map(|(json,)| json)
-    .collect();
-
-    let about_info: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(about_info.*) FROM about_info LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let resume_data: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(resume_data.*) FROM resume_data LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let contact_messages: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(contact_messages.*) FROM contact_messages ORDER BY created_at DESC"
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .into_iter()
-    .map(|(json,)| json)
-    .collect();
-
-    let translations: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(translations.*) FROM translations LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let footer_settings: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(footer_settings.*) FROM footer_settings LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let features: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(features.*) FROM features LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let hero_section: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(hero_section.*) FROM hero_section LIMIT 1"
-    )
-    .fetch_optional(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map(|(json,)| json);
-
-    let admin_users: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(admin_users.*) FROM admin_users"
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .into_iter()
-    .map(|(json,)| json)
-    .collect();
-
-    let visitor_logs: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(visitor_logs.*) FROM visitor_logs ORDER BY created_at DESC LIMIT 1000"
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .into_iter()
-    .map(|(json,)| json)
-    .collect();
-
-    pool.close().await;
-
-    tracing::info!("✅ PostgreSQL data exported:");
-    tracing::info!("  - Portfolio Items: {}", portfolio_items.len());
-    tracing::info!("  - Contact Messages: {}", contact_messages.len());
-    tracing::info!("  - Admin Users: {}", admin_users.len());
-    tracing::info!("  - Visitor Logs: {}", visitor_logs.len());
-
-    // 3. Create full backup structure
-    let full_backup = FullBackup {
-        redis_data,
-        postgres_data: PostgresBackupData {
-            portfolio_items,
-            about_info,
-            resume_data,
-            contact_messages,
-            translations,
-            footer_settings,
-            features,
-            hero_section,
-            admin_users,
-            visitor_logs,
-        },
-        metadata: BackupMetadata {
-            created_at: chrono::Utc::now().to_rfc3339(),
-            version: "1.0".to_string(),
-            backup_type: "full".to_string(),
-        },
-    };
-
-    let json_str = serde_json::to_string_pretty(&full_backup)
+    let json_str = serde_json::to_string_pretty(&backup_data)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     fs::write(&backup_path, json_str)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    tracing::info!("✅ Full backup created: {}", backup_filename);
-
     Ok(Json(serde_json::json!({
         "success": true,
-        "filename": backup_filename,
-        "type": "full"
+        "filename": backup_filename
     })))
 }
 
-// Restore backup (BOTH Redis Sessions + PostgreSQL Data)
+// Restore backup
 async fn admin_restore_backup(
     session: ReadableSession,
     Extension(state): Extension<AppState>,
@@ -2176,7 +1999,7 @@ async fn admin_restore_backup(
         .and_then(|v| v.as_str())
         .ok_or(StatusCode::BAD_REQUEST)?;
 
-    tracing::info!("🔄 Restoring FULL backup: {}", filename);
+    tracing::info!("🔄 Restoring backup: {}", filename);
 
     let backup_dir = "/data/backups";
     let backup_path = Path::new(backup_dir).join(filename);
@@ -2187,201 +2010,55 @@ async fn admin_restore_backup(
     }
 
     tracing::info!("📂 Reading backup file...");
+    // Read JSON backup
     let json_str = fs::read_to_string(&backup_path)
         .map_err(|e| {
             tracing::error!("❌ Failed to read backup file: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     
-    tracing::info!("🔍 Parsing backup ({} bytes)...", json_str.len());
-    let full_backup: FullBackup = serde_json::from_str(&json_str)
+    tracing::info!("🔍 Parsing JSON ({} bytes)...", json_str.len());
+    let backup_data: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&json_str)
         .map_err(|e| {
-            tracing::error!("❌ Failed to parse backup: {}", e);
+            tracing::error!("❌ Failed to parse JSON: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    // 1. Restore Redis sessions
-    tracing::info!("🗑️ Flushing Redis sessions...");
-    let mut redis_conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tracing::info!("🗑️ Flushing Redis...");
+    let mut conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    // Delete only session keys
-    let session_keys: Vec<String> = redis::cmd("KEYS")
-        .arg("axum.sid:*")
-        .query_async(&mut redis_conn)
+    // Flush all current data
+    let _: () = redis::cmd("FLUSHALL")
+        .query_async(&mut conn)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    for key in session_keys {
-        let _: () = redis::cmd("DEL")
-            .arg(&key)
-            .query_async(&mut redis_conn)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+        .map_err(|e| {
+            tracing::error!("❌ FLUSHALL failed: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    tracing::info!("💾 Restoring {} Redis sessions...", full_backup.redis_data.len());
-    let mut restored_redis = 0;
-    for (key, value) in full_backup.redis_data {
+    tracing::info!("💾 Restoring {} keys...", backup_data.len());
+    // Restore all keys
+    let mut restored = 0;
+    for (key, value) in backup_data {
         if let Some(v) = value.as_str() {
             let _: () = redis::cmd("SET")
                 .arg(&key)
                 .arg(v)
-                .query_async(&mut redis_conn)
+                .query_async(&mut conn)
                 .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            restored_redis += 1;
+                .map_err(|e| {
+                    tracing::error!("❌ SET failed for key {}: {:?}", key, e);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+            restored += 1;
         }
     }
 
-    tracing::info!("✅ Redis restored: {} sessions", restored_redis);
-
-    // 2. Restore PostgreSQL data
-    let db_url = env::var("DATABASE_URL").unwrap_or_else(|_| 
-        "postgres://portfolio_user:portfolio_pass@postgres:5432/portfolio_db".to_string()
-    );
-    
-    let pool = sqlx::PgPool::connect(&db_url)
-        .await
-        .map_err(|e| {
-            tracing::error!("❌ PostgreSQL connection failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-
-    tracing::info!("🗑️ Clearing PostgreSQL tables...");
-    
-    // Clear all tables (except admin_users for safety)
-    sqlx::query("DELETE FROM portfolio_items")
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    sqlx::query("DELETE FROM contact_messages")
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    sqlx::query("DELETE FROM visitor_logs")
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    tracing::info!("💾 Restoring PostgreSQL data...");
-    let pg_data = full_backup.postgres_data;
-    
-    let portfolio_count = pg_data.portfolio_items.len();
-    let contact_count = pg_data.contact_messages.len();
-
-    // Restore portfolio items
-    for item in &pg_data.portfolio_items {
-        sqlx::query(
-            "INSERT INTO portfolio_items (id, title, description, technologies, image_url, github_url, live_url, huggingface_url, display_order, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
-        )
-        .bind(item.get("id").and_then(|v| v.as_str()))
-        .bind(item.get("title").and_then(|v| v.as_str()))
-        .bind(item.get("description").and_then(|v| v.as_str()))
-        .bind(item.get("technologies").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_str()).map(String::from).collect::<Vec<_>>()
-        }))
-        .bind(item.get("image_url").and_then(|v| v.as_str()))
-        .bind(item.get("github_url").and_then(|v| v.as_str()))
-        .bind(item.get("live_url").and_then(|v| v.as_str()))
-        .bind(item.get("huggingface_url").and_then(|v| v.as_str()))
-        .bind(item.get("display_order").or(item.get("order")).and_then(|v| v.as_i64()).map(|n| n as i32))
-        .bind(item.get("created_at").and_then(|v| v.as_str()))
-        .bind(item.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
-        .await
-        .map_err(|e| {
-            tracing::error!("❌ Failed to restore portfolio item: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    }
-
-    // Restore about_info
-    if let Some(about) = pg_data.about_info {
-        sqlx::query("DELETE FROM about_info").execute(&pool).await.ok();
-        sqlx::query(
-            "INSERT INTO about_info (id, name, title, bio, skills, email, github, linkedin, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
-        )
-        .bind(about.get("id").and_then(|v| v.as_str()))
-        .bind(about.get("name").and_then(|v| v.as_str()))
-        .bind(about.get("title").and_then(|v| v.as_str()))
-        .bind(about.get("bio").and_then(|v| v.as_str()))
-        .bind(about.get("skills").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_str()).map(String::from).collect::<Vec<_>>()
-        }))
-        .bind(about.get("email").and_then(|v| v.as_str()))
-        .bind(about.get("github").and_then(|v| v.as_str()))
-        .bind(about.get("linkedin").and_then(|v| v.as_str()))
-        .bind(about.get("created_at").and_then(|v| v.as_str()))
-        .bind(about.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    // Restore resume_data
-    if let Some(resume) = pg_data.resume_data {
-        sqlx::query("DELETE FROM resume_data").execute(&pool).await.ok();
-        sqlx::query(
-            "INSERT INTO resume_data (id, data, created_at, updated_at) VALUES ($1, $2, $3, $4)"
-        )
-        .bind(resume.get("id").and_then(|v| v.as_str()))
-        .bind(&resume.get("data").unwrap_or(&serde_json::json!({})))
-        .bind(resume.get("created_at").and_then(|v| v.as_str()))
-        .bind(resume.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    // Restore contact_messages
-    for msg in &pg_data.contact_messages {
-        sqlx::query(
-            "INSERT INTO contact_messages (id, name, email, message, created_at) VALUES ($1, $2, $3, $4, $5)"
-        )
-        .bind(msg.get("id").and_then(|v| v.as_str()))
-        .bind(msg.get("name").and_then(|v| v.as_str()))
-        .bind(msg.get("email").and_then(|v| v.as_str()))
-        .bind(msg.get("message").and_then(|v| v.as_str()))
-        .bind(msg.get("created_at").and_then(|v| v.as_str()))
-        .execute(&pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-
-    // Restore other tables similarly...
-    if let Some(trans) = pg_data.translations {
-        sqlx::query("DELETE FROM translations").execute(&pool).await.ok();
-        sqlx::query("INSERT INTO translations (id, data) VALUES ($1, $2)")
-            .bind(trans.get("id").and_then(|v| v.as_str()))
-            .bind(&trans.get("data").unwrap_or(&serde_json::json!({})))
-            .execute(&pool).await.ok();
-    }
-
-    if let Some(footer) = pg_data.footer_settings {
-        sqlx::query("DELETE FROM footer_settings").execute(&pool).await.ok();
-        sqlx::query("INSERT INTO footer_settings (id, text, show_backend) VALUES ($1, $2, $3)")
-            .bind(footer.get("id").and_then(|v| v.as_str()))
-            .bind(footer.get("text").and_then(|v| v.as_str()))
-            .bind(footer.get("show_backend").and_then(|v| v.as_bool()))
-            .execute(&pool).await.ok();
-    }
-
-    pool.close().await;
-
-    tracing::info!("✅ Restore complete!");
+    tracing::info!("✅ Restore complete! {} keys restored", restored);
 
     Ok(Json(serde_json::json!({
         "success": true,
-        "message": "Full backup restored successfully!",
-        "restored": {
-            "redis_sessions": restored_redis,
-            "portfolio_items": portfolio_count,
-            "contact_messages": contact_count
-        }
+        "message": "Backup restored successfully!"
     })))
 }
 
