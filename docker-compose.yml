@@ -8,7 +8,7 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./backend/assets:/var/www/assets:ro
     depends_on:
-      frontend:
+      frontend_v2:
         condition: service_healthy
       backend1:
         condition: service_healthy
@@ -20,8 +20,38 @@ services:
     networks:
       - portfolio-network
 
-  frontend:
-    build: ./frontend
+  beszel:
+    image: henrygd/beszel:latest
+    container_name: beszel
+    restart: unless-stopped
+    environment:
+      - APP_URL=${BESZEL_APP_URL:-http://localhost:8090}
+    ports:
+      - "8090:8090"
+    volumes:
+      - beszel-data:/beszel_data
+    networks:
+      - portfolio-network
+
+  beszel-agent:
+    image: henrygd/beszel-agent:latest
+    container_name: beszel-agent
+    profiles: ["monitoring-agent"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - LISTEN=${BESZEL_AGENT_LISTEN:-45876}
+      - HUB_URL=${BESZEL_AGENT_HUB_URL:-http://127.0.0.1:8090}
+      - TOKEN=${BESZEL_AGENT_TOKEN:-}
+      - KEY=${BESZEL_AGENT_KEY:-}
+      - DISABLE_SSH=${BESZEL_AGENT_DISABLE_SSH:-true}
+      - DOCKER_HOST=${BESZEL_AGENT_DOCKER_HOST:-}
+    volumes:
+      - beszel-agent-data:/var/lib/beszel-agent
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  frontend_v2:
+    image: frontend_patched:20251213
     expose:
       - "3000"
     environment:
@@ -41,8 +71,11 @@ services:
     environment:
       - PORT=8080
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://portfolio_user:portfolio_secure_pass_2025@postgres:5432/portfolio_db
+      - DATABASE_URL=${DATABASE_URL:-postgresql://portfolio_user:portfolio_secure_pass_2025@postgres:5432/portfolio_db}
       - HOSTNAME=backend1
+      - SESSION_SECRET=${SESSION_SECRET}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER:-muhammedozer32@gmail.com}
@@ -71,8 +104,11 @@ services:
     environment:
       - PORT=8080
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://portfolio_user:portfolio_secure_pass_2025@postgres:5432/portfolio_db
+      - DATABASE_URL=${DATABASE_URL:-postgresql://portfolio_user:portfolio_secure_pass_2025@postgres:5432/portfolio_db}
       - HOSTNAME=backend2
+      - SESSION_SECRET=${SESSION_SECRET}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER:-muhammedozer32@gmail.com}
@@ -117,7 +153,7 @@ services:
     image: postgres:16-alpine
     environment:
       - POSTGRES_USER=portfolio_user
-      - POSTGRES_PASSWORD=portfolio_secure_pass_2025
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-portfolio_secure_pass_2025}
       - POSTGRES_DB=portfolio_db
     ports:
       - "5432:5432"
@@ -143,4 +179,6 @@ volumes:
   postgres-data:
   backup-data:
   uploads-data:
+  beszel-data:
+  beszel-agent-data:
 

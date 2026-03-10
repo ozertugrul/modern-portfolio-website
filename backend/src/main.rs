@@ -215,7 +215,10 @@ struct BackupInfo {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct FullBackup {
+    #[serde(default)]
     redis_data: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    redis_app_data: serde_json::Map<String, serde_json::Value>,
     postgres_data: PostgresBackupData,
     metadata: BackupMetadata,
 }
@@ -338,11 +341,17 @@ const REDIS_FOOTER_KEY: &str = "footer:text";
 const REDIS_FEATURES_KEY: &str = "features:data";
 const REDIS_HERO_KEY: &str = "hero:section";
 const REDIS_VISITOR_LOGS_KEY: &str = "logs:visitors";
-
-// Default admin password hash for "admin123" (bcrypt with cost 12)
-// This hash is generated once and stored here as fallback
-// If this hash doesn't work, the system will generate a new one on first login attempt
-const DEFAULT_ADMIN_PASSWORD_HASH: &str = "$2b$12$h7iQNvIPH2LSpzo4hJrKAuXrKBnmk8DMDrAqD.iAx5H.NDasMrhqG"; // "admin123"
+const REDIS_APP_BACKUP_KEYS: [&str; 9] = [
+    REDIS_PORTFOLIO_KEY,
+    REDIS_ABOUT_KEY,
+    REDIS_RESUME_KEY,
+    REDIS_CONTACTS_KEY,
+    REDIS_ADMIN_PASSWORD_KEY,
+    REDIS_TRANSLATIONS_KEY,
+    REDIS_FOOTER_KEY,
+    REDIS_FEATURES_KEY,
+    REDIS_HERO_KEY,
+];
 
 // Helper: Check if user is admin
 async fn is_admin(session: ReadableSession) -> bool {
@@ -382,6 +391,47 @@ fn strip_html_tags(html: &str) -> String {
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
+}
+
+fn is_safe_backup_filename(filename: &str) -> bool {
+    if filename.is_empty() || filename.len() > 150 {
+        return false;
+    }
+
+    if !filename.ends_with(".json") {
+        return false;
+    }
+
+    if filename.contains("/") || filename.contains("\\") || filename.contains("..") {
+        return false;
+    }
+
+    filename
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+}
+
+fn sanitize_backup_filename(name: &str) -> Option<String> {
+    if name.is_empty() || name.len() > 100 {
+        return None;
+    }
+
+    let with_ext = if name.ends_with(".json") {
+        name.to_string()
+    } else {
+        format!("{}.json", name)
+    };
+
+    let safe = with_ext
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+        .collect::<String>();
+
+    if is_safe_backup_filename(&safe) {
+        Some(safe)
+    } else {
+        None
+    }
 }
 
 // Public endpoints
@@ -696,7 +746,7 @@ async fn get_hero(Extension(state): Extension<AppState>) -> Result<Json<HeroSect
     }
 }
 
-// Helper: Get admin password hash from Redis or default
+// Helper: Get admin password hash from Redis
 async fn get_admin_password_hash(state: &AppState) -> Result<String, StatusCode> {
     let mut conn = get_redis_conn(state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
@@ -706,25 +756,7 @@ async fn get_admin_password_hash(state: &AppState) -> Result<String, StatusCode>
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    // If no hash in Redis, use default and also store it in Redis for consistency
-    let final_hash = hash.unwrap_or_else(|| {
-        let default = DEFAULT_ADMIN_PASSWORD_HASH.to_string();
-        // Store default in Redis asynchronously (fire and forget)
-        let state_clone = state.clone();
-        let default_clone = default.clone();
-        tokio::spawn(async move {
-            if let Ok(mut conn) = get_redis_conn(&state_clone).await {
-                let _ = redis::cmd("SET")
-                    .arg(REDIS_ADMIN_PASSWORD_KEY)
-                    .arg(&default_clone)
-                    .query_async::<_, ()>(&mut conn)
-                    .await;
-            }
-        });
-        default
-    });
-    
-    Ok(final_hash)
+    hash.ok_or(StatusCode::UNAUTHORIZED)
 }
 
 // Helper: Set admin password hash to Redis
@@ -747,15 +779,18 @@ async fn admin_login(
     Extension(state): Extension<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
-    let password_hash = get_admin_password_hash(&state).await?;
-    
-    tracing::info!("Login attempt - password length: {}", payload.password.len());
-    tracing::info!("Using hash from Redis/default");
-    
-    // Try bcrypt verification
-    let verify_result = bcrypt::verify(&payload.password, &password_hash);
-    
-    match verify_result {
+    let password_hash = match get_admin_password_hash(&state).await {
+        Ok(hash) => hash,
+        Err(StatusCode::UNAUTHORIZED) => {
+            return Ok(Json(LoginResponse {
+                success: false,
+                message: "Admin hesabı henüz yapılandırılmadı".to_string(),
+            }))
+        }
+        Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR),
+    };
+
+    match bcrypt::verify(&payload.password, &password_hash) {
         Ok(true) => {
             session.insert("is_admin", true).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             tracing::info!("✅ Admin login successful");
@@ -766,39 +801,10 @@ async fn admin_login(
         }
         Ok(false) => {
             tracing::warn!("❌ Admin login failed: password verification failed");
-            tracing::warn!("Password provided: '{}' (length: {})", payload.password, payload.password.len());
-            tracing::warn!("Hash being used: {}", password_hash);
-            
-            // If Redis hash failed, try default hash
-            if password_hash != DEFAULT_ADMIN_PASSWORD_HASH {
-                tracing::info!("Trying default hash as fallback...");
-                match bcrypt::verify(&payload.password, DEFAULT_ADMIN_PASSWORD_HASH) {
-                    Ok(true) => {
-                        // Default hash works, update Redis
-                        if let Err(e) = set_admin_password_hash(&state, DEFAULT_ADMIN_PASSWORD_HASH).await {
-                            tracing::error!("Failed to update Redis with default hash: {:?}", e);
-                        }
-                        session.insert("is_admin", true).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                        tracing::info!("✅ Admin login successful with default hash");
-                        Ok(Json(LoginResponse {
-                            success: true,
-                            message: "Giriş başarılı".to_string(),
-                        }))
-                    }
-                    _ => {
-                        tracing::error!("Default hash also failed");
-                        Ok(Json(LoginResponse {
-                            success: false,
-                            message: "Şifre hatalı".to_string(),
-                        }))
-                    }
-                }
-            } else {
-                Ok(Json(LoginResponse {
-                    success: false,
-                    message: "Şifre hatalı".to_string(),
-                }))
-            }
+            Ok(Json(LoginResponse {
+                success: false,
+                message: "Şifre hatalı".to_string(),
+            }))
         }
         Err(e) => {
             tracing::error!("Bcrypt verification error: {:?}", e);
@@ -1748,7 +1754,7 @@ async fn main() -> Result<()> {
         redis_client: redis_client.clone(),
     };
 
-    // İlk çalıştırmada admin şifresi yoksa oluştur
+    // İlk çalıştırmada admin şifresi yoksa env üzerinden oluştur
     {
         let mut conn = app_state.redis_client.get_multiplexed_async_connection().await?;
         let existing_hash: Option<String> = redis::cmd("GET")
@@ -1757,28 +1763,43 @@ async fn main() -> Result<()> {
             .await?;
         
         if existing_hash.is_none() {
-            tracing::info!("🔐 Admin şifresi bulunamadı, yeni şifre oluşturuluyor...");
-            let default_password = "admin123";
-            let hash = bcrypt::hash(default_password, bcrypt::DEFAULT_COST)
-                .map_err(|e| anyhow::anyhow!("Bcrypt hash error: {}", e))?;
+            tracing::warn!("🔐 Admin şifresi bulunamadı, env ayarından oluşturuluyor...");
+            let hash = if let Ok(hash_from_env) = env::var("ADMIN_PASSWORD_HASH") {
+                if hash_from_env.starts_with("$2") {
+                    hash_from_env
+                } else {
+                    return Err(anyhow::anyhow!("ADMIN_PASSWORD_HASH geçerli bcrypt hash olmalı"));
+                }
+            } else {
+                let admin_password = env::var("ADMIN_PASSWORD")
+                    .map_err(|_| anyhow::anyhow!("İlk kurulum için ADMIN_PASSWORD veya ADMIN_PASSWORD_HASH gerekli"))?;
+                if admin_password.trim().len() < 12 {
+                    return Err(anyhow::anyhow!("ADMIN_PASSWORD en az 12 karakter olmalı"));
+                }
+                bcrypt::hash(admin_password, bcrypt::DEFAULT_COST)
+                    .map_err(|e| anyhow::anyhow!("Bcrypt hash error: {}", e))?
+            };
+
             redis::cmd("SET")
                 .arg(REDIS_ADMIN_PASSWORD_KEY)
                 .arg(&hash)
                 .query_async::<_, ()>(&mut conn)
                 .await?;
-            tracing::info!("✅ Admin şifresi oluşturuldu: {}", default_password);
+            tracing::info!("✅ Admin şifresi env üzerinden oluşturuldu");
         }
     }
 
-    // Session Layer: 1 saat geçerli
-    // Secret en az 64 byte olmalı - tam 64 byte'lık secret
-    let secret_key: &[u8] = b"supersecretkeythatis32bytes!supersecretkeythatis32bytes!12345678";
-    let session_layer = SessionLayer::new(session_store, secret_key)
-        .with_secure(false) // local test için false, production'da true olmalı
+    let session_secret = env::var("SESSION_SECRET")
+        .map_err(|_| anyhow::anyhow!("SESSION_SECRET gerekli"))?;
+    if session_secret.len() < 64 {
+        return Err(anyhow::anyhow!("SESSION_SECRET en az 64 karakter olmalı"));
+    }
+
+    let session_layer = SessionLayer::new(session_store, session_secret.as_bytes())
+        .with_secure(true)
         .with_cookie_name("session_id");
 
-    // CORS ayarları - axum 0.6 için (şimdilik kullanılmıyor, Nginx proxy yapıyor)
-    let _cors = CorsLayer::new()
+    let cors = CorsLayer::new()
         .allow_origin(tower_http::cors::Any)
         .allow_methods(tower_http::cors::Any)
         .allow_headers(tower_http::cors::Any);
@@ -1827,6 +1848,7 @@ async fn main() -> Result<()> {
         .route("/api/admin/backups/:filename", delete(admin_delete_backup))
         .route("/api/admin/upload", post(admin_upload_file))
         .route("/uploads/:filename", get(serve_uploaded_file))
+        .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             app_state.clone(),
             log_visitor
@@ -1843,7 +1865,7 @@ async fn main() -> Result<()> {
     
     tracing::info!("🚀 Backend server listening on http://{}", addr);
     tracing::info!("📊 Health check: http://{}/health", addr);
-    tracing::info!("🔐 Admin panel: http://{}/api/admin/login (password: admin123)", addr);
+    tracing::info!("🔐 Admin panel: http://{}/api/admin/login", addr);
 
     axum::Server::bind(&addr)
         .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
@@ -1983,7 +2005,7 @@ async fn admin_create_backup(
     let backup_filename = format!("backup_{}.json", timestamp);
     let backup_path = Path::new(backup_dir).join(&backup_filename);
 
-    // 1. Export Redis sessions (NOT data, only sessions!)
+    // 1. Export Redis sessions
     let mut redis_conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     let keys: Vec<String> = redis::cmd("KEYS")
@@ -2008,6 +2030,23 @@ async fn admin_create_backup(
     }
 
     tracing::info!("✅ Redis sessions backed up: {} keys", redis_data.len());
+
+    // 1b. Export Redis application data keys
+    let mut redis_app_data = serde_json::Map::new();
+    for key in REDIS_APP_BACKUP_KEYS {
+        let value: Option<String> = redis::cmd("GET")
+            .arg(key)
+            .query_async(&mut redis_conn)
+            .await
+            .ok()
+            .flatten();
+
+        if let Some(v) = value {
+            redis_app_data.insert(key.to_string(), serde_json::Value::String(v));
+        }
+    }
+
+    tracing::info!("✅ Redis app data backed up: {} keys", redis_app_data.len());
 
     // 2. Export ALL PostgreSQL data
     let db_url = env::var("DATABASE_URL").unwrap_or_else(|_| 
@@ -2078,7 +2117,7 @@ async fn admin_create_backup(
     .map(|(json,)| json);
 
     let features: Option<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-        "SELECT row_to_json(features.*) FROM features LIMIT 1"
+        "SELECT row_to_json(features_settings.*) FROM features_settings LIMIT 1"
     )
     .fetch_optional(&pool)
     .await
@@ -2124,6 +2163,7 @@ async fn admin_create_backup(
     // 3. Create full backup structure
     let full_backup = FullBackup {
         redis_data,
+        redis_app_data,
         postgres_data: PostgresBackupData {
             portfolio_items,
             about_info,
@@ -2138,7 +2178,7 @@ async fn admin_create_backup(
         },
         metadata: BackupMetadata {
             created_at: chrono::Utc::now().to_rfc3339(),
-            version: "1.0".to_string(),
+            version: "1.1".to_string(),
             backup_type: "full".to_string(),
         },
     };
@@ -2176,6 +2216,10 @@ async fn admin_restore_backup(
         .and_then(|v| v.as_str())
         .ok_or(StatusCode::BAD_REQUEST)?;
 
+    if !is_safe_backup_filename(filename) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     tracing::info!("🔄 Restoring FULL backup: {}", filename);
 
     let backup_dir = "/data/backups";
@@ -2200,6 +2244,13 @@ async fn admin_restore_backup(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    let FullBackup {
+        redis_data,
+        redis_app_data,
+        postgres_data: pg_data,
+        metadata: _,
+    } = full_backup;
+
     // 1. Restore Redis sessions
     tracing::info!("🗑️ Flushing Redis sessions...");
     let mut redis_conn = get_redis_conn(&state).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2219,12 +2270,16 @@ async fn admin_restore_backup(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
-    tracing::info!("💾 Restoring {} Redis sessions...", full_backup.redis_data.len());
+    tracing::info!("💾 Restoring {} Redis sessions...", redis_data.len());
     let mut restored_redis = 0;
-    for (key, value) in full_backup.redis_data {
+    for (key, value) in &redis_data {
+        if !key.starts_with("axum.sid:") {
+            continue;
+        }
+
         if let Some(v) = value.as_str() {
             let _: () = redis::cmd("SET")
-                .arg(&key)
+                .arg(key)
                 .arg(v)
                 .query_async(&mut redis_conn)
                 .await
@@ -2234,6 +2289,37 @@ async fn admin_restore_backup(
     }
 
     tracing::info!("✅ Redis restored: {} sessions", restored_redis);
+
+    let mut effective_redis_app_data = redis_app_data;
+    if effective_redis_app_data.is_empty() {
+        for key in REDIS_APP_BACKUP_KEYS {
+            if let Some(value) = redis_data.get(key) {
+                effective_redis_app_data.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+
+    for key in REDIS_APP_BACKUP_KEYS {
+        let _: () = redis::cmd("DEL")
+            .arg(key)
+            .query_async(&mut redis_conn)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    let mut restored_redis_app = 0;
+    for (key, value) in &effective_redis_app_data {
+        if let Some(v) = value.as_str() {
+            let _: () = redis::cmd("SET")
+                .arg(key)
+                .arg(v)
+                .query_async(&mut redis_conn)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            restored_redis_app += 1;
+        }
+    }
+    tracing::info!("✅ Redis app data restored: {} keys", restored_redis_app);
 
     // 2. Restore PostgreSQL data
     let db_url = env::var("DATABASE_URL").unwrap_or_else(|_| 
@@ -2247,27 +2333,27 @@ async fn admin_restore_backup(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    let mut tx = pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     tracing::info!("🗑️ Clearing PostgreSQL tables...");
     
     // Clear all tables (except admin_users for safety)
     sqlx::query("DELETE FROM portfolio_items")
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     sqlx::query("DELETE FROM contact_messages")
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     sqlx::query("DELETE FROM visitor_logs")
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     tracing::info!("💾 Restoring PostgreSQL data...");
-    let pg_data = full_backup.postgres_data;
-    
     let portfolio_count = pg_data.portfolio_items.len();
     let contact_count = pg_data.contact_messages.len();
 
@@ -2290,7 +2376,7 @@ async fn admin_restore_backup(
         .bind(item.get("display_order").or(item.get("order")).and_then(|v| v.as_i64()).map(|n| n as i32))
         .bind(item.get("created_at").and_then(|v| v.as_str()))
         .bind(item.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| {
             tracing::error!("❌ Failed to restore portfolio item: {}", e);
@@ -2300,7 +2386,10 @@ async fn admin_restore_backup(
 
     // Restore about_info
     if let Some(about) = pg_data.about_info {
-        sqlx::query("DELETE FROM about_info").execute(&pool).await.ok();
+        sqlx::query("DELETE FROM about_info")
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         sqlx::query(
             "INSERT INTO about_info (id, name, title, bio, skills, email, github, linkedin, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
@@ -2317,22 +2406,76 @@ async fn admin_restore_backup(
         .bind(about.get("linkedin").and_then(|v| v.as_str()))
         .bind(about.get("created_at").and_then(|v| v.as_str()))
         .bind(about.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     // Restore resume_data
     if let Some(resume) = pg_data.resume_data {
-        sqlx::query("DELETE FROM resume_data").execute(&pool).await.ok();
+        sqlx::query("DELETE FROM resume_data")
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         sqlx::query(
-            "INSERT INTO resume_data (id, data, created_at, updated_at) VALUES ($1, $2, $3, $4)"
+            "INSERT INTO resume_data (
+                id, personal_info, section_order, summary, summary_enabled,
+                skills, skills_enabled, soft_skills, soft_skills_enabled,
+                education, education_enabled, experience, experience_enabled,
+                projects, projects_enabled, languages, languages_enabled,
+                certifications, certifications_enabled, awards, awards_enabled,
+                publications, publications_enabled, volunteer, volunteer_enabled,
+                interests, interests_enabled, resume_references, references_enabled,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5,
+                $6, $7, $8, $9,
+                $10, $11, $12, $13,
+                $14, $15, $16, $17,
+                $18, $19, $20, $21,
+                $22, $23, $24, $25,
+                $26, $27, $28, $29,
+                $30, $31
+            )"
         )
         .bind(resume.get("id").and_then(|v| v.as_str()))
-        .bind(&resume.get("data").unwrap_or(&serde_json::json!({})))
+        .bind(resume.get("personal_info").cloned().unwrap_or_else(|| serde_json::json!({})))
+        .bind(resume.get("section_order").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("summary").and_then(|v| v.as_str()))
+        .bind(resume.get("summary_enabled").and_then(|v| v.as_bool()).unwrap_or(false))
+        .bind(resume.get("skills").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("skills_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("soft_skills").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("soft_skills_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("education").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("education_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("experience").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("experience_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("projects").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("projects_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("languages").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("languages_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("certifications").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("certifications_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("awards").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("awards_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("publications").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("publications_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("volunteer").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("volunteer_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(resume.get("interests").cloned().unwrap_or_else(|| serde_json::json!([])))
+        .bind(resume.get("interests_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        .bind(
+            resume
+                .get("resume_references")
+                .cloned()
+                .or_else(|| resume.get("references").cloned())
+                .unwrap_or_else(|| serde_json::json!([]))
+        )
+        .bind(resume.get("references_enabled").and_then(|v| v.as_bool()).unwrap_or(false))
         .bind(resume.get("created_at").and_then(|v| v.as_str()))
         .bind(resume.get("updated_at").and_then(|v| v.as_str()))
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
@@ -2347,28 +2490,101 @@ async fn admin_restore_backup(
         .bind(msg.get("email").and_then(|v| v.as_str()))
         .bind(msg.get("message").and_then(|v| v.as_str()))
         .bind(msg.get("created_at").and_then(|v| v.as_str()))
-        .execute(&pool)
+        .execute(&mut *tx)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
 
     // Restore other tables similarly...
     if let Some(trans) = pg_data.translations {
-        sqlx::query("DELETE FROM translations").execute(&pool).await.ok();
-        sqlx::query("INSERT INTO translations (id, data) VALUES ($1, $2)")
-            .bind(trans.get("id").and_then(|v| v.as_str()))
-            .bind(&trans.get("data").unwrap_or(&serde_json::json!({})))
-            .execute(&pool).await.ok();
+        sqlx::query("DELETE FROM translations")
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if trans.get("locale").is_some() && trans.get("translations").is_some() {
+            sqlx::query("INSERT INTO translations (id, locale, translations) VALUES ($1, $2, $3)")
+                .bind(trans.get("id").and_then(|v| v.as_str()))
+                .bind(trans.get("locale").and_then(|v| v.as_str()))
+                .bind(trans.get("translations").cloned().unwrap_or_else(|| serde_json::json!({})))
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        } else {
+            let tr_data = trans.get("tr").cloned().unwrap_or_else(|| serde_json::json!({}));
+            let en_data = trans.get("en").cloned().unwrap_or_else(|| serde_json::json!({}));
+            sqlx::query("INSERT INTO translations (locale, translations) VALUES ($1, $2)")
+                .bind("tr")
+                .bind(tr_data)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            sqlx::query("INSERT INTO translations (locale, translations) VALUES ($1, $2)")
+                .bind("en")
+                .bind(en_data)
+                .execute(&mut *tx)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
     }
 
     if let Some(footer) = pg_data.footer_settings {
-        sqlx::query("DELETE FROM footer_settings").execute(&pool).await.ok();
-        sqlx::query("INSERT INTO footer_settings (id, text, show_backend) VALUES ($1, $2, $3)")
+        sqlx::query("DELETE FROM footer_settings")
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query("INSERT INTO footer_settings (id, text_tr, text_en, enabled, show_backend) VALUES ($1, $2, $3, $4, $5)")
             .bind(footer.get("id").and_then(|v| v.as_str()))
-            .bind(footer.get("text").and_then(|v| v.as_str()))
-            .bind(footer.get("show_backend").and_then(|v| v.as_bool()))
-            .execute(&pool).await.ok();
+            .bind(footer.get("text_tr").or_else(|| footer.get("text")).and_then(|v| v.as_str()).unwrap_or(""))
+            .bind(footer.get("text_en").or_else(|| footer.get("text")).and_then(|v| v.as_str()).unwrap_or(""))
+            .bind(footer.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+            .bind(footer.get("show_backend").and_then(|v| v.as_bool()).unwrap_or(false))
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
+
+    if let Some(features) = pg_data.features {
+        sqlx::query("DELETE FROM features_settings")
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query(
+            "INSERT INTO features_settings (id, performance_tr, performance_en, scalable_tr, scalable_en, secure_tr, secure_en)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)"
+        )
+        .bind(features.get("id").and_then(|v| v.as_str()))
+        .bind(features.get("performance_tr").cloned().unwrap_or_else(|| serde_json::json!({})))
+        .bind(features.get("performance_en").cloned().unwrap_or_else(|| serde_json::json!({})))
+        .bind(features.get("scalable_tr").cloned().unwrap_or_else(|| serde_json::json!({})))
+        .bind(features.get("scalable_en").cloned().unwrap_or_else(|| serde_json::json!({})))
+        .bind(features.get("secure_tr").cloned().unwrap_or_else(|| serde_json::json!({})))
+        .bind(features.get("secure_en").cloned().unwrap_or_else(|| serde_json::json!({})))
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    if let Some(hero) = pg_data.hero_section {
+        sqlx::query("DELETE FROM hero_section")
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query(
+            "INSERT INTO hero_section (id, greeting_tr, greeting_en, name, title_tr, title_en)
+             VALUES ($1, $2, $3, $4, $5, $6)"
+        )
+        .bind(hero.get("id").and_then(|v| v.as_str()))
+        .bind(hero.get("greeting_tr").and_then(|v| v.as_str()).unwrap_or(""))
+        .bind(hero.get("greeting_en").and_then(|v| v.as_str()).unwrap_or(""))
+        .bind(hero.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+        .bind(hero.get("title_tr").and_then(|v| v.as_str()).unwrap_or(""))
+        .bind(hero.get("title_en").and_then(|v| v.as_str()).unwrap_or(""))
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     pool.close().await;
 
@@ -2379,6 +2595,7 @@ async fn admin_restore_backup(
         "message": "Full backup restored successfully!",
         "restored": {
             "redis_sessions": restored_redis,
+            "redis_app_keys": restored_redis_app,
             "portfolio_items": portfolio_count,
             "contact_messages": contact_count
         }
@@ -2397,15 +2614,15 @@ async fn admin_delete_backup(
     use std::fs;
     use std::path::Path;
 
+    if !is_safe_backup_filename(&filename) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
     let backup_dir = "/data/backups";
     let backup_path = Path::new(backup_dir).join(&filename);
 
     if !backup_path.exists() {
         return Err(StatusCode::NOT_FOUND);
-    }
-
-    if !filename.ends_with(".json") {
-        return Err(StatusCode::BAD_REQUEST);
     }
 
     fs::remove_file(&backup_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2436,25 +2653,13 @@ async fn admin_rename_backup(
         .and_then(|v| v.as_str())
         .ok_or(StatusCode::BAD_REQUEST)?;
 
-    // Validate new name
-    if new_name.is_empty() || new_name.len() > 100 {
+    if !is_safe_backup_filename(old_filename) {
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    // Add .json extension if not present
-    let new_filename = if new_name.ends_with(".json") {
-        new_name.to_string()
-    } else {
-        format!("{}.json", new_name)
-    };
+    let safe_new_filename = sanitize_backup_filename(new_name).ok_or(StatusCode::BAD_REQUEST)?;
 
-    // Sanitize filename (remove dangerous characters)
-    let safe_new_filename = new_filename
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
-        .collect::<String>();
-
-    if safe_new_filename.is_empty() {
+    if !is_safe_backup_filename(&safe_new_filename) {
         return Err(StatusCode::BAD_REQUEST);
     }
 

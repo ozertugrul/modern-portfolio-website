@@ -495,12 +495,11 @@ Body: { tr: {...}, en: {...} }
 # Backups
 GET    /api/admin/backups
 POST   /api/admin/backups
-Body: { name }
-PUT    /api/admin/backups/restore
+POST   /api/admin/backups/restore
 Body: { filename }
-PUT    /api/admin/backups/rename
-Body: { old_name, new_name }
-DELETE /api/admin/backups?filename={name}
+POST   /api/admin/backups/rename
+Body: { old_filename, new_name }
+DELETE /api/admin/backups/{filename}
 
 # Site Logs
 GET    /api/admin/logs

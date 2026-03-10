@@ -1531,7 +1531,7 @@ Redis"
         {activeTab === 'backups' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
-              <h2 className="text-2xl font-bold">💾 Redis Yedekleri</h2>
+              <h2 className="text-2xl font-bold">💾 Tam Sistem Yedekleri</h2>
               <div className="flex gap-3">
                 <button
                   onClick={loadData}
