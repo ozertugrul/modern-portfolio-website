@@ -779,7 +779,7 @@ Copyright © 2025 Ertuğrul Özer
 
 **Ertuğrul Özer** - Full Stack Developer (Rust & Next.js)
 
-- 🌐 Website: [https://culture-angels-low-combined.trycloudflare.com/](https://culture-angels-low-combined.trycloudflare.com/)
+- 🌐 Website: [https://ertugrulozer.com.tr/](https://ertugrulozer.com.tr/)
 - 💼 GitHub: [@ozertugrul](https://github.com/ozertugrul)
 - 📧 Email: muhammedozer32@gmail.com
 
