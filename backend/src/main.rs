@@ -1,7 +1,7 @@
 use axum::{
     extract::{Extension, Query, Path},
     http::StatusCode,
-    response::{Json, Response},
+    response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
     Router,
     body::{Bytes, Body},
@@ -341,6 +341,11 @@ const REDIS_FOOTER_KEY: &str = "footer:text";
 const REDIS_FEATURES_KEY: &str = "features:data";
 const REDIS_HERO_KEY: &str = "hero:section";
 const REDIS_VISITOR_LOGS_KEY: &str = "logs:visitors";
+const REDIS_RATE_LIMIT_PREFIX: &str = "rate_limit";
+const CONTACT_RATE_LIMIT_MAX: i64 = 8;
+const CONTACT_RATE_LIMIT_WINDOW_SECS: i64 = 600;
+const ADMIN_LOGIN_RATE_LIMIT_MAX: i64 = 6;
+const ADMIN_LOGIN_RATE_LIMIT_WINDOW_SECS: i64 = 600;
 const REDIS_APP_BACKUP_KEYS: [&str; 9] = [
     REDIS_PORTFOLIO_KEY,
     REDIS_ABOUT_KEY,
@@ -369,6 +374,64 @@ async fn require_admin(session: ReadableSession) -> Result<(), StatusCode> {
 // Helper: Get Redis connection
 async fn get_redis_conn(state: &AppState) -> Result<redis::aio::MultiplexedConnection> {
     Ok(state.redis_client.get_multiplexed_async_connection().await?)
+}
+
+fn extract_client_ip(
+    req: &axum::http::Request<axum::body::Body>,
+    addr: std::net::SocketAddr,
+) -> String {
+    if let Some(ip) = req
+        .headers()
+        .get("cf-connecting-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return ip.to_string();
+    }
+
+    if let Some(ip) = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return ip.to_string();
+    }
+
+    addr.ip().to_string()
+}
+
+async fn check_rate_limit(
+    state: &AppState,
+    bucket: &str,
+    client_ip: &str,
+    max_requests: i64,
+    window_secs: i64,
+) -> Result<bool, StatusCode> {
+    let mut conn = get_redis_conn(state)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let key = format!("{}:{}:{}", REDIS_RATE_LIMIT_PREFIX, bucket, client_ip);
+
+    let current: i64 = redis::cmd("INCR")
+        .arg(&key)
+        .query_async(&mut conn)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if current == 1 {
+        let _: () = redis::cmd("EXPIRE")
+            .arg(&key)
+            .arg(window_secs)
+            .query_async(&mut conn)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    Ok(current > max_requests)
 }
 
 // Helper: Strip HTML tags for plain text
@@ -1225,9 +1288,9 @@ async fn admin_reply_contact(
     let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "mailserver".to_string());
     let smtp_port = env::var("SMTP_PORT").unwrap_or_else(|_| "587".to_string())
         .parse::<u16>().unwrap_or(587);
-    let smtp_user = env::var("SMTP_USER").unwrap_or_else(|_| "info@ertugrulozer.com.tr".to_string());
+    let smtp_user = env::var("SMTP_USER").unwrap_or_else(|_| "noreply@example.com".to_string());
     let smtp_pass = env::var("SMTP_PASSWORD").unwrap_or_default();
-    let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "info@ertugrulozer.com.tr".to_string());
+    let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@example.com".to_string());
     let base_url = env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
     
     // Build email with proper From header including name
@@ -1683,6 +1746,52 @@ async fn log_visitor(
     response
 }
 
+async fn rate_limit_sensitive_routes(
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::State(state): axum::extract::State<AppState>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next<axum::body::Body>,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let client_ip = extract_client_ip(&req, addr);
+
+    let policy = match (method.as_str(), path.as_str()) {
+        ("POST", "/api/contact") => Some((
+            "contact",
+            CONTACT_RATE_LIMIT_MAX,
+            CONTACT_RATE_LIMIT_WINDOW_SECS,
+            "Çok fazla iletişim isteği gönderildi. Lütfen birkaç dakika sonra tekrar deneyin.",
+        )),
+        ("POST", "/api/admin/login") => Some((
+            "admin_login",
+            ADMIN_LOGIN_RATE_LIMIT_MAX,
+            ADMIN_LOGIN_RATE_LIMIT_WINDOW_SECS,
+            "Çok fazla giriş denemesi yapıldı. Lütfen birkaç dakika sonra tekrar deneyin.",
+        )),
+        _ => None,
+    };
+
+    if let Some((bucket, max_requests, window_secs, message)) = policy {
+        match check_rate_limit(&state, bucket, &client_ip, max_requests, window_secs).await {
+            Ok(true) => {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "success": false,
+                        "message": message,
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(false) => {}
+            Err(status) => return status.into_response(),
+        }
+    }
+
+    next.run(req).await
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Tracing setup
@@ -1849,6 +1958,10 @@ async fn main() -> Result<()> {
         .route("/api/admin/upload", post(admin_upload_file))
         .route("/uploads/:filename", get(serve_uploaded_file))
         .layer(cors)
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.clone(),
+            rate_limit_sensitive_routes
+        ))
         .layer(axum::middleware::from_fn_with_state(
             app_state.clone(),
             log_visitor

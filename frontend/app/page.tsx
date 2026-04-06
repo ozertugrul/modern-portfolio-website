@@ -385,30 +385,30 @@ export default function Home() {
                     </div>
                   )}
                   <div className="p-4 sm:p-6 relative flex flex-col h-full">
-                    <h3 className="text-lg sm:text-xl font-semibold mb-2 text-slate-100 group-hover:text-slate-50 transition-colors duration-300 line-clamp-2">
+                    <h3 className="text-lg sm:text-xl font-semibold mb-2 text-zinc-900 dark:text-zinc-100 group-hover:text-blue-700 dark:group-hover:text-blue-400 transition-colors duration-300 line-clamp-2">
                       {item.title}
                     </h3>
-                    <p className="text-gray-400 mb-4 text-sm group-hover:text-gray-300 transition-colors duration-300 line-clamp-3">
+                    <p className="text-zinc-600 dark:text-zinc-400 mb-4 text-sm group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-colors duration-300 line-clamp-3">
                       {item.description}
                     </p>
                     <div className="flex flex-wrap gap-2 mb-4 min-h-[60px]">
                       {item.technologies.map((tech, idx) => (
                         <span
                           key={tech}
-                          className="px-2 py-1 bg-slate-700 text-slate-200 text-xs rounded group-hover:bg-[#18212E] group-hover:text-slate-50 transition-all duration-300 transform group-hover:scale-105 h-fit"
+                          className="px-2 py-1 bg-zinc-200 dark:bg-slate-700 text-zinc-800 dark:text-slate-200 text-xs rounded group-hover:bg-[#18212E] group-hover:text-slate-50 transition-all duration-300 transform group-hover:scale-105 h-fit"
                           style={{ transitionDelay: `${idx * 50}ms` }}
                         >
                           {tech}
                         </span>
                       ))}
                     </div>
-                    <div className="flex flex-wrap gap-3 opacity-80 group-hover:opacity-100 transition-opacity duration-300 mt-auto pt-2 border-t border-slate-700">
+                    <div className="flex flex-wrap gap-3 opacity-80 group-hover:opacity-100 transition-opacity duration-300 mt-auto pt-2 border-t border-zinc-300 dark:border-slate-700">
                       {item.github_url && (
                         <a
                           href={item.github_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm text-white hover:underline hover:translate-x-1 transition-all duration-300 inline-block"
+                          className="text-sm text-zinc-800 dark:text-zinc-100 hover:text-blue-700 dark:hover:text-blue-400 hover:underline hover:translate-x-1 transition-all duration-300 inline-block"
                         >
                           {t.portfolio.viewGithub}
                         </a>
@@ -418,7 +418,7 @@ export default function Home() {
                           href={item.live_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm text-white hover:underline hover:translate-x-1 transition-all duration-300 inline-block"
+                          className="text-sm text-zinc-800 dark:text-zinc-100 hover:text-blue-700 dark:hover:text-blue-400 hover:underline hover:translate-x-1 transition-all duration-300 inline-block"
                         >
                           {t.portfolio.viewDemo}
                         </a>
