@@ -376,6 +376,10 @@ Default Password: `admin123` (⚠️ Change immediately!)
 - Date fields support "Present" for current roles
 - Real-time preview
 
+Public CV endpoints (served by Nginx):
+- Turkish CV: `https://ertugrulozer.com.tr/cv` → `backend/assets/cv.pdf`
+- English CV: `https://ertugrulozer.com.tr/cv-en` → `backend/assets/cv-en.pdf`
+
 #### 4. Contact Messages
 - View inbox in **"Mesajlar"**
 - Blue highlight = unread

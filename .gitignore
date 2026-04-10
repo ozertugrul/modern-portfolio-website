@@ -71,3 +71,6 @@ cloudflared-linux-amd64.deb
 # Backup files
 *.backup
 *.bak
+
+# CV assets
+/backend/assets/cv-en.pdf
